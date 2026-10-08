@@ -18,6 +18,11 @@ def build_parser():
     run.add_argument("--vendor", default="Arthexis")
     run.add_argument("--model", default="Simulator")
     run.add_argument("--connect-timeout", type=float, default=10.0)
+    run.add_argument("--connector", type=int, help="Run one charge then exit")
+    run.add_argument("--rfid", default="TEST001")
+    run.add_argument("--power", type=float, default=7.2, help="Constant charging power in kW")
+    run.add_argument("--duration", type=float, default=60.0, help="Charge duration in seconds")
+    run.add_argument("--meter-interval", type=float, default=1.0, help="MeterValues interval in seconds")
     subs.add_parser("help", help="Show command help")
     return parser
 
@@ -32,6 +37,8 @@ def main(argv=None):
         asyncio.run(run_charge_point(
             cp=args.cp, url=args.url, ca=args.ca, vendor=args.vendor,
             model=args.model, connect_timeout=args.connect_timeout,
+            connector=args.connector, rfid=args.rfid, power_kw=args.power,
+            duration=args.duration, meter_interval=args.meter_interval,
         ))
     except (OSError, ValueError, RuntimeError, TimeoutError) as exc:
         print(f"ocpp-simulator: {exc}", file=sys.stderr)
