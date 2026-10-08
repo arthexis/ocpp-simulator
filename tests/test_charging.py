@@ -30,9 +30,9 @@ async def test_complete_transaction_and_meter_values():
     )
     assert wh == 0  # 7.2 kW for 100 milliseconds is less than 1 Wh
     assert [type(c).__name__ for c in cp.calls] == [
-        "StatusNotification", "Authorize", "StartTransaction",
-        "StatusNotification", "MeterValues", "MeterValues",
-        "StopTransaction", "StatusNotification",
+        "StatusNotificationPayload", "AuthorizePayload", "StartTransactionPayload",
+        "StatusNotificationPayload", "MeterValuesPayload", "MeterValuesPayload",
+        "StopTransactionPayload", "StatusNotificationPayload",
     ]
     assert cp.calls[2].meter_start == 0
     assert cp.calls[4].transaction_id == 42
