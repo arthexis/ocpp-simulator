@@ -20,14 +20,14 @@ from ocpp_simulator.connection import run_charge_point, tls_context
 class StubCSMS(ServerChargePoint):
     @on(Action.BootNotification)
     def on_boot(self, charge_point_vendor, charge_point_model, **kwargs):
-        return call_result.BootNotification(
+        return call_result.BootNotificationPayload(
             current_time="2026-01-01T00:00:00Z", interval=1, status="Accepted"
         )
 
     @on(Action.Heartbeat)
     def on_heartbeat(self):
         self.heartbeat_seen.set()
-        return call_result.Heartbeat(current_time="2026-01-01T00:00:01Z")
+        return call_result.HeartbeatPayload(current_time="2026-01-01T00:00:01Z")
 
 
 def _certificates(tmp_path):
