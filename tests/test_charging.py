@@ -60,3 +60,23 @@ async def test_invalid_charge_parameters():
     ):
         with pytest.raises(ValueError):
             await simulate_charge(cp, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_sixty_second_energy_without_wall_clock_delay(monkeypatch):
+    async def fast_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("ocpp_simulator.charging.asyncio.sleep", fast_sleep)
+    cp = FakeChargePoint()
+    wh = await simulate_charge(
+        cp, connector=2, rfid="A", power_kw=7.2,
+        duration=60, meter_interval=15,
+    )
+    assert wh == 120
+    readings = [
+        int(c.meter_value[0].sampled_value[0].value)
+        for c in cp.calls if isinstance(c, call.MeterValues)
+    ]
+    assert readings == [30, 60, 90, 120]
+    assert cp.calls[-2].meter_stop == 120
