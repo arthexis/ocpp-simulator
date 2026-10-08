@@ -15,7 +15,7 @@ class SimulatorChargePoint(OCPPChargePoint):
         self.model = model
 
     async def boot(self):
-        return await self.call(call.BootNotification(
+        return await self.call(call.BootNotificationPayload(
             charge_point_vendor=self.vendor,
             charge_point_model=self.model,
         ))
@@ -23,5 +23,5 @@ class SimulatorChargePoint(OCPPChargePoint):
     async def heartbeats(self, seconds: int):
         while True:
             await asyncio.sleep(seconds)
-            response = await self.call(call.Heartbeat())
+            response = await self.call(call.HeartbeatPayload())
             print(f"Heartbeat: {getattr(response, 'current_time', 'received')}", flush=True)
