@@ -75,10 +75,17 @@ async def _exercise(url, ssl_context=None, ca=None):
             heartbeat_waiter.cancel()
             await asyncio.gather(heartbeat_waiter, return_exceptions=True)
     finally:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        # Close the transport before cancelling the protocol task: some
+        # Python/websockets combinations wait for peer closure on cancellation.
         server.close()
-        await server.wait_closed()
+        try:
+            await asyncio.wait_for(server.wait_closed(), timeout=5)
+        finally:
+            task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=5)
+            except TimeoutError:
+                pytest.fail("simulator did not terminate after WebSocket shutdown")
 
 
 @pytest.mark.asyncio
