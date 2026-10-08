@@ -11,19 +11,20 @@ import websockets
 from ocpp.routing import on
 from ocpp.v16 import ChargePoint as ServerChargePoint
 from ocpp.v16 import call_result
+from ocpp.v16.enums import Action
 
 from ocpp_simulator.cli import build_parser
 from ocpp_simulator.connection import run_charge_point, tls_context
 
 
-class TestCSMS(ServerChargePoint):
-    @on("BootNotification")
+class StubCSMS(ServerChargePoint):
+    @on(Action.boot_notification)
     def on_boot(self, charge_point_vendor, charge_point_model, **kwargs):
         return call_result.BootNotification(
             current_time="2026-01-01T00:00:00Z", interval=1, status="Accepted"
         )
 
-    @on("Heartbeat")
+    @on(Action.heartbeat)
     def on_heartbeat(self):
         self.heartbeat_seen.set()
         return call_result.Heartbeat(current_time="2026-01-01T00:00:01Z")
@@ -43,7 +44,7 @@ async def _exercise(url, ssl_context=None, ca=None):
     booted, heartbeat = asyncio.Event(), asyncio.Event()
 
     async def handler(ws):
-        charge_point = TestCSMS("SIM001", ws)
+        charge_point = StubCSMS("SIM001", ws)
         charge_point.heartbeat_seen = heartbeat
         booted.set()
         await charge_point.start()
