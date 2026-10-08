@@ -34,19 +34,19 @@ async def simulate_charge(
     transaction_id = None
     elapsed = Decimal(0)
     try:
-        await cp.call(call.StatusNotification(
+        await cp.call(call.StatusNotificationPayload(
             connector_id=connector, error_code="NoError", status="Preparing",
         ))
-        authorized = await cp.call(call.Authorize(id_tag=rfid))
+        authorized = await cp.call(call.AuthorizePayload(id_tag=rfid))
         if authorized.id_tag_info["status"] != "Accepted":
             raise RuntimeError("rfid_not_authorized")
-        started = await cp.call(call.StartTransaction(
+        started = await cp.call(call.StartTransactionPayload(
             connector_id=connector, id_tag=rfid, meter_start=0, timestamp=timestamp(),
         ))
         if started.id_tag_info["status"] != "Accepted":
             raise RuntimeError("start_transaction_rejected")
         transaction_id = started.transaction_id
-        await cp.call(call.StatusNotification(
+        await cp.call(call.StatusNotificationPayload(
             connector_id=connector, error_code="NoError", status="Charging",
         ))
         total = Decimal(str(duration))
@@ -56,14 +56,14 @@ async def simulate_charge(
             await asyncio.sleep(float(period))
             elapsed += period
             wh = int((power * Decimal(1000) * elapsed / Decimal(3600)).to_integral_value())
-            await cp.call(call.MeterValues(
+            await cp.call(call.MeterValuesPayload(
                 connector_id=connector, transaction_id=transaction_id,
                 meter_value=[MeterValue(timestamp=timestamp(), sampled_value=[
                     SampledValue(value=str(wh), measurand="Energy.Active.Import.Register", unit="Wh"),
                 ])],
             ))
         final_wh = int((power * Decimal(1000) * total / Decimal(3600)).to_integral_value())
-        await cp.call(call.StopTransaction(
+        await cp.call(call.StopTransactionPayload(
             transaction_id=transaction_id, meter_stop=final_wh,
             timestamp=timestamp(), reason="Local",
         ))
@@ -72,7 +72,7 @@ async def simulate_charge(
     finally:
         # Avoid reporting Available while an unsettled transaction is still open.
         if transaction_id is None:
-            await cp.call(call.StatusNotification(
+            await cp.call(call.StatusNotificationPayload(
                 connector_id=connector, error_code="NoError", status="Available",
             ))
         cp._charging_connectors.remove(connector)
