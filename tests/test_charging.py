@@ -14,9 +14,9 @@ class FakeChargePoint:
 
     async def call(self, request):
         self.calls.append(request)
-        if isinstance(request, call.Authorize):
+        if isinstance(request, call.AuthorizePayload):
             return SimpleNamespace(id_tag_info={"status": "Accepted" if self.authorized else "Blocked"})
-        if isinstance(request, call.StartTransaction):
+        if isinstance(request, call.StartTransactionPayload):
             return SimpleNamespace(id_tag_info={"status": "Accepted"}, transaction_id=42)
         return SimpleNamespace()
 
@@ -45,7 +45,7 @@ async def test_authorization_rejection_never_opens_transaction():
     cp = FakeChargePoint(authorized=False)
     with pytest.raises(RuntimeError, match="rfid_not_authorized"):
         await simulate_charge(cp, connector=1, rfid="BLOCKED", power_kw=7.2, duration=0)
-    assert not any(isinstance(c, call.StartTransaction) for c in cp.calls)
+    assert not any(isinstance(c, call.StartTransactionPayload) for c in cp.calls)
     assert cp.calls[-1].status == "Available"
 
 
@@ -76,7 +76,7 @@ async def test_sixty_second_energy_without_wall_clock_delay(monkeypatch):
     assert wh == 120
     readings = [
         int(c.meter_value[0].sampled_value[0].value)
-        for c in cp.calls if isinstance(c, call.MeterValues)
+        for c in cp.calls if isinstance(c, call.MeterValuesPayload)
     ]
     assert readings == [30, 60, 90, 120]
     assert cp.calls[-2].meter_stop == 120
