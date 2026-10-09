@@ -22,7 +22,10 @@ def build_parser():
     run.add_argument("--remote", action="store_true", help="Listen for remote CSMS commands")
     run.add_argument("--connectors", type=int, default=1, help="Number of simulated connectors")
     run.add_argument("--rfid", default="TEST001")
-    run.add_argument("--power", type=float, default=7.2, help="Constant charging power in kW")
+    run.add_argument("--power", type=float, default=7.2, help="Charging ceiling in kW")
+    run.add_argument("--battery-kwh", type=float, default=60.0, help="Battery capacity in kWh (remote mode)")
+    run.add_argument("--soc", type=float, default=30.0, help="Initial battery charge percentage (remote mode)")
+    run.add_argument("--seed", type=int, default=1, help="Reproducible power fluctuation seed")
     run.add_argument("--duration", type=float, default=60.0, help="Charge duration in seconds")
     run.add_argument("--meter-interval", type=float, default=1.0, help="MeterValues interval in seconds")
     subs.add_parser("help", help="Show command help")
@@ -42,6 +45,7 @@ def main(argv=None):
             connector=args.connector, rfid=args.rfid, power_kw=args.power,
             duration=args.duration, meter_interval=args.meter_interval,
             remote=args.remote, connectors=args.connectors,
+            battery_kwh=args.battery_kwh, initial_soc=args.soc, seed=args.seed,
         ))
     except (OSError, ValueError, RuntimeError, TimeoutError) as exc:
         print(f"ocpp-simulator: {exc}", file=sys.stderr)
