@@ -1,0 +1,52 @@
+---
+- name: Validate deployment user and supported Python
+  ansible.builtin.assert:
+    that:
+      - ansible_user_uid | int != 0
+      - ansible_facts.python.version.major | int == 3
+      - ansible_facts.python.version.minor | int >= 11
+    fail_msg: OCPP simulator requires a non-root account with Python 3.11 or newer.
+
+- name: Create simulator installation directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ ocpp_simulator_prefix }}"
+    - "{{ ocpp_simulator_bin_dir }}"
+
+- name: Create Python virtual environment
+  ansible.builtin.command:
+    argv:
+      - "{{ ocpp_simulator_python }}"
+      - -m
+      - venv
+      - "{{ ocpp_simulator_prefix }}/venv"
+    creates: "{{ ocpp_simulator_prefix }}/venv/bin/python"
+
+- name: Install simulator from this checkout
+  ansible.builtin.command:
+    argv:
+      - "{{ ocpp_simulator_prefix }}/venv/bin/python"
+      - -m
+      - pip
+      - install
+      - --disable-pip-version-check
+      - "{{ ocpp_simulator_source }}"
+  register: ocpp_simulator_install
+  changed_when: "'Successfully installed' in ocpp_simulator_install.stdout"
+
+- name: Expose CLI in user bin directory
+  ansible.builtin.file:
+    src: "{{ ocpp_simulator_prefix }}/venv/bin/ocpp-simulator"
+    dest: "{{ ocpp_simulator_bin_dir }}/ocpp-simulator"
+    state: link
+    force: true
+
+- name: Verify installed command
+  ansible.builtin.command:
+    argv:
+      - "{{ ocpp_simulator_bin_dir }}/ocpp-simulator"
+      - --help
+  changed_when: false
