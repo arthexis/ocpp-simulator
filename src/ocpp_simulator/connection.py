@@ -114,7 +114,21 @@ async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
                     heartbeat.cancel()
                     await asyncio.gather(heartbeat, return_exceptions=True)
             else:
-                await stopping.wait()
+                heartbeat = asyncio.create_task(charge_point.heartbeats(seconds))
+                shutdown_waiter = asyncio.create_task(stopping.wait())
+                try:
+                    done, _ = await asyncio.wait(
+                        [heartbeat, shutdown_waiter, receiver],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if heartbeat in done:
+                        await heartbeat
+                    if receiver in done:
+                        await receiver
+                finally:
+                    heartbeat.cancel()
+                    shutdown_waiter.cancel()
+                    await asyncio.gather(heartbeat, shutdown_waiter, return_exceptions=True)
         finally:
             receiver.cancel()
             await asyncio.gather(receiver, return_exceptions=True)
