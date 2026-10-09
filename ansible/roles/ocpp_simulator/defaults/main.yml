@@ -1,0 +1,5 @@
+---
+ocpp_simulator_source: "{{ playbook_dir }}/../.."
+ocpp_simulator_prefix: "{{ ansible_env.HOME }}/.local/share/ocpp-simulator"
+ocpp_simulator_bin_dir: "{{ ansible_env.HOME }}/.local/bin"
+ocpp_simulator_python: python3
