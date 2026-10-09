@@ -84,3 +84,23 @@ start requests are allowed to proceed. Energy is deterministic: 7.2 kW over
 
 Omit `--connector` to preserve the Chunk 1 boot/heartbeat-only mode.
 Remote commands, multiple concurrent sessions and failover remain future work.
+
+## Remote controlled simulator (Chunk 3)
+
+Keep a simulated charger connected and accept CSMS-issued remote commands:
+
+```sh
+ocpp-simulator run --cp SIM001 --url ws://127.0.0.1:9000/SIM001 \
+  --remote --connectors 2 --power 7.2 --meter-interval 5
+```
+
+Supports OCPP 1.6J `RemoteStartTransaction`, `RemoteStopTransaction`,
+`Reset`, `GetConfiguration` and `ChangeConfiguration`. Transactions
+are associated with their originating connector, so connector 2 can start
+while connector 1 is charging. Remote stops target the CSMS-assigned
+transaction ID. Soft reset requests graceful transaction stops before
+reconnecting; hard reset interrupts the simulated tasks before reconnecting.
+
+Configuration lives in memory and is reset on reconnect. The simulated
+primary/backup vendor keys are stored and returned but do **not** drive
+actual endpoint changes or failover yet. That is reserved for Chunk 4.
