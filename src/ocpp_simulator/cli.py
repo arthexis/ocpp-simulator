@@ -19,6 +19,8 @@ def build_parser():
     run.add_argument("--model", default="Simulator")
     run.add_argument("--connect-timeout", type=float, default=10.0)
     run.add_argument("--connector", type=int, help="Run one charge then exit")
+    run.add_argument("--remote", action="store_true", help="Listen for remote CSMS commands")
+    run.add_argument("--connectors", type=int, default=1, help="Number of simulated connectors")
     run.add_argument("--rfid", default="TEST001")
     run.add_argument("--power", type=float, default=7.2, help="Constant charging power in kW")
     run.add_argument("--duration", type=float, default=60.0, help="Charge duration in seconds")
@@ -39,6 +41,7 @@ def main(argv=None):
             model=args.model, connect_timeout=args.connect_timeout,
             connector=args.connector, rfid=args.rfid, power_kw=args.power,
             duration=args.duration, meter_interval=args.meter_interval,
+            remote=args.remote, connectors=args.connectors,
         ))
     except (OSError, ValueError, RuntimeError, TimeoutError) as exc:
         print(f"ocpp-simulator: {exc}", file=sys.stderr)
