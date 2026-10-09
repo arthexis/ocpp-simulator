@@ -23,6 +23,7 @@ async def simulate_charge(
     meter_interval: float = 1.0,
     stop_event: asyncio.Event | None = None,
     on_started=None,
+    on_meter=None,
 ) -> int:
     """Perform a complete charge; report cumulative energy in Wh."""
     if connector < 1 or not rfid or power_kw <= 0 or duration < 0 or meter_interval <= 0:
@@ -67,6 +68,8 @@ async def simulate_charge(
                 await asyncio.sleep(float(period))
             elapsed += period
             wh = int((power * Decimal(1000) * elapsed / Decimal(3600)).to_integral_value())
+            if on_meter is not None:
+                on_meter(wh)
             await cp.call(call.MeterValuesPayload(
                 connector_id=connector, transaction_id=transaction_id,
                 meter_value=[MeterValue(timestamp=timestamp(), sampled_value=[
