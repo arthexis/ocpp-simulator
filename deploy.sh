@@ -13,6 +13,7 @@ if ! command -v ansible-playbook >/dev/null 2>&1; then
     exit 1
 fi
 
+export ANSIBLE_ROLES_PATH="$ROOT/ansible/roles"
 started=$(date +%s)
 status=0
 ansible-playbook "$ROOT/ansible/playbooks/install.yml" -i localhost, -c local "$@" || status=$?
