@@ -73,7 +73,7 @@ class SimulatorChargePoint(OCPPChargePoint):
     async def on_remote_start(self, id_tag, connector_id=None, **kwargs):
         connector = connector_id or 1
         print(f"RemoteStartTransaction received: connector {connector}, RFID {id_tag}", flush=True)
-        if not self.registry.free(connector) or self.batteries[connector].soc >= 100 if connector in self.batteries else True:
+        if not self.registry.free(connector) or self.batteries[connector].soc >= 100:
             return call_result.RemoteStartTransactionPayload(status="Rejected")
         stop = self.registry.reserve(connector)
         task = asyncio.create_task(self._remote_session(connector, id_tag, stop))
