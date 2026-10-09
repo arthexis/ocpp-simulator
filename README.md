@@ -54,6 +54,20 @@ default. `--ca` adds a custom CA bundle, suitable for a private test CA.
 There is no insecure TLS mode. Do not use a production charger identity against
 a live CSMS.
 
+## Stop a running simulation safely
+
+Use **Ctrl+C** in the foreground terminal (or send **SIGTERM** to the
+simulator process). These signals now request a graceful shutdown: ongoing
+simulated sessions send `StopTransaction` and return their connectors to
+Available before the WebSocket is closed. For a one-shot session, the current
+charge is stopped early rather than abandoned.
+
+A force kill (`SIGKILL`), machine crash, broken network or loss of CSMS
+connectivity cannot transmit `StopTransaction`. Such records must remain
+explicitly recoverable by the CSMS, not silently closed merely because a
+charge point disconnected. A previously abandoned `SIM001` transaction will
+not retroactively be closed by upgrading the simulator.
+
 ## Test
 
 ```sh
