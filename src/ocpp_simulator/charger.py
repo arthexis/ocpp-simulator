@@ -53,7 +53,8 @@ class SimulatorChargePoint(OCPPChargePoint):
                 battery=battery,
                 on_started=lambda tx: self._report_remote_start(connector, tx),
                 on_meter=lambda wh: print(
-                    f"Meter: connector {connector}, {wh} Wh, battery {battery.soc:.1f}%", flush=True
+                    f"Meter: connector {connector}, {wh} Wh, "
+                    f"{battery.last_power_kw:.2f} kW, battery {battery.soc:.1f}%", flush=True
                 ),
             )
             print(f"Remote transaction complete: {energy} Wh", flush=True)
