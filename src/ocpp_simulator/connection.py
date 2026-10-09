@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 import websockets
 
 from ocpp_simulator.charger import SimulatorChargePoint
+from ocpp_simulator.charging import simulate_charge
 
 
 def tls_context(url: str, ca: str | None = None) -> ssl.SSLContext | None:
@@ -24,7 +25,10 @@ def tls_context(url: str, ca: str | None = None) -> ssl.SSLContext | None:
 
 
 async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
-                           model: str, connect_timeout: float = 10.0) -> None:
+                           model: str, connect_timeout: float = 10.0,
+                           connector: int | None = None, rfid: str = "TEST001",
+                           power_kw: float = 7.2, duration: float = 60.0,
+                           meter_interval: float = 1.0) -> None:
     if not cp or "/" in cp:
         raise ValueError("--cp must be a non-empty charge-point identifier without '/'")
     ssl_context = tls_context(url, ca)
@@ -49,7 +53,20 @@ async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
                 raise RuntimeError("BootNotification returned an invalid heartbeat interval")
             print(f"Heartbeat interval: {seconds} seconds", flush=True)
             print("Simulator ready", flush=True)
-            await charge_point.heartbeats(seconds)
+            if connector is not None:
+                heartbeat = asyncio.create_task(charge_point.heartbeats(seconds))
+                try:
+                    energy = await simulate_charge(
+                        charge_point, connector=connector, rfid=rfid,
+                        power_kw=power_kw, duration=duration,
+                        meter_interval=meter_interval,
+                    )
+                    print(f"Transaction complete: {energy} Wh", flush=True)
+                finally:
+                    heartbeat.cancel()
+                    await asyncio.gather(heartbeat, return_exceptions=True)
+            else:
+                await charge_point.heartbeats(seconds)
         finally:
             receiver.cancel()
             await asyncio.gather(receiver, return_exceptions=True)
