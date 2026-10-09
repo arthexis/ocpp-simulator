@@ -29,7 +29,8 @@ async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
                            connector: int | None = None, rfid: str = "TEST001",
                            power_kw: float = 7.2, duration: float = 60.0,
                            meter_interval: float = 1.0, remote: bool = False,
-                           connectors: int = 1) -> None:
+                           connectors: int = 1, battery_kwh: float = 60.0,
+                           initial_soc: float = 30.0, seed: int = 1) -> None:
     if not cp or "/" in cp:
         raise ValueError("--cp must be a non-empty charge-point identifier without '/'")
     if remote and connector is not None:
@@ -48,6 +49,7 @@ async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
         charge_point = SimulatorChargePoint(
             cp, connection, vendor=vendor, model=model,
             connectors=connectors, power_kw=power_kw, meter_interval=meter_interval,
+            battery_kwh=battery_kwh, initial_soc=initial_soc, seed=seed,
         )
         receiver = asyncio.create_task(charge_point.start())
         try:
@@ -104,4 +106,5 @@ async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
             cp=cp, url=url, ca=ca, vendor=vendor, model=model,
             connect_timeout=connect_timeout, remote=True, connectors=connectors,
             power_kw=power_kw, meter_interval=meter_interval,
+            battery_kwh=battery_kwh, initial_soc=initial_soc, seed=seed,
         )
