@@ -11,6 +11,31 @@ Requires Python 3.11 or later.
 python -m pip install -e '.[dev]'
 ```
 
+## Deploy the CLI with Ansible
+
+On a Debian machine with Python 3.11+, `python3-venv`, `python3-pip`, and
+`ansible-playbook` installed, run from a checkout:
+
+```sh
+sh deploy.sh
+~/.local/bin/ocpp-simulator --help
+```
+
+The role installs a non-editable Python package into
+`~/.local/share/ocpp-simulator/venv`, then links the installed entry point
+to `~/.local/bin/ocpp-simulator`. Ensure `~/.local/bin` is on `PATH` if
+you want to invoke the command without its full path.
+
+It intentionally **does not start a systemd service** or connect to a
+production CSMS automatically. The simulator is an interactive test client;
+use `ocpp-simulator run --cp ... --url ...` to start a deliberate test.
+
+The installation is owned by the current non-root account and is separate
+from any `ocpp-csms` service or virtual environment. Re-running the
+installer upgrades the installed simulator from the checkout. Ansible can
+be invoked directly with
+`ANSIBLE_ROLES_PATH=ansible/roles ansible-playbook ansible/playbooks/install.yml -i localhost, -c local`.
+
 ## Connect to a CSMS
 
 ```sh
