@@ -57,6 +57,7 @@ jobs:
             image: python:3.11-bookworm
           - platform: Debian 13 / Python 3.13
             image: python:3.13-trixie
+    timeout-minutes: 8
     container:
       image: ${{ matrix.image }}
     steps:
@@ -66,7 +67,7 @@ jobs:
       - name: Installed CLI
         run: ocpp-simulator --help
       - name: Tests
-        run: python -m pytest -q
+        run: timeout 180s python -m pytest -vv -s
 
   ci:
     name: CI
