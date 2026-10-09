@@ -38,13 +38,15 @@ class SimulatorChargePoint(OCPPChargePoint):
             print(f"Heartbeat: {getattr(response, 'current_time', 'received')}", flush=True)
 
     async def _remote_session(self, connector, rfid, stop):
+        print(f"Remote start: connector {connector}, RFID {rfid}", flush=True)
         try:
             energy = await simulate_charge(
                 self, connector=connector, rfid=rfid,
                 power_kw=self.power_kw, duration=86400,
                 meter_interval=float(self.config.values["MeterValueSampleInterval"][0]),
                 stop_event=stop,
-                on_started=lambda tx: self.registry.active_transaction(connector, tx),
+                on_started=lambda tx: self._report_remote_start(connector, tx),
+                on_meter=lambda wh: print(f"Meter: connector {connector}, {wh} Wh", flush=True),
             )
             print(f"Remote transaction complete: {energy} Wh", flush=True)
         except Exception as exc:
@@ -52,9 +54,17 @@ class SimulatorChargePoint(OCPPChargePoint):
         finally:
             self.registry.release(connector)
 
+    def _report_remote_start(self, connector, transaction_id):
+        self.registry.active_transaction(connector, transaction_id)
+        print(
+            f"Remote transaction started: connector {connector}, "
+            f"TXN {transaction_id}", flush=True,
+        )
+
     @on(Action.RemoteStartTransaction)
     async def on_remote_start(self, id_tag, connector_id=None, **kwargs):
         connector = connector_id or 1
+        print(f"RemoteStartTransaction received: connector {connector}, RFID {id_tag}", flush=True)
         if not self.registry.free(connector):
             return call_result.RemoteStartTransactionPayload(status="Rejected")
         stop = self.registry.reserve(connector)
@@ -65,6 +75,7 @@ class SimulatorChargePoint(OCPPChargePoint):
     @on(Action.RemoteStopTransaction)
     def on_remote_stop(self, transaction_id, **kwargs):
         accepted = self.registry.stop_transaction(transaction_id)
+        print(f"RemoteStopTransaction received: TXN {transaction_id}, accepted={accepted}", flush=True)
         return call_result.RemoteStopTransactionPayload(
             status="Accepted" if accepted else "Rejected"
         )
