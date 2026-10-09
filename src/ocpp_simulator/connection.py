@@ -28,9 +28,14 @@ async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
                            model: str, connect_timeout: float = 10.0,
                            connector: int | None = None, rfid: str = "TEST001",
                            power_kw: float = 7.2, duration: float = 60.0,
-                           meter_interval: float = 1.0) -> None:
+                           meter_interval: float = 1.0, remote: bool = False,
+                           connectors: int = 1) -> None:
     if not cp or "/" in cp:
         raise ValueError("--cp must be a non-empty charge-point identifier without '/'")
+    if remote and connector is not None:
+        raise ValueError("--remote cannot be combined with --connector")
+    if connectors < 1:
+        raise ValueError("--connectors must be positive")
     ssl_context = tls_context(url, ca)
     print(f"Connecting: {url}", flush=True)
     async with websockets.connect(
@@ -40,7 +45,10 @@ async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
         if connection.subprotocol != "ocpp1.6":
             raise RuntimeError("CSMS did not negotiate ocpp1.6")
         print("WebSocket: connected", flush=True)
-        charge_point = SimulatorChargePoint(cp, connection, vendor=vendor, model=model)
+        charge_point = SimulatorChargePoint(
+            cp, connection, vendor=vendor, model=model,
+            connectors=connectors, power_kw=power_kw, meter_interval=meter_interval,
+        )
         receiver = asyncio.create_task(charge_point.start())
         try:
             response = await charge_point.boot()
@@ -53,7 +61,28 @@ async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
                 raise RuntimeError("BootNotification returned an invalid heartbeat interval")
             print(f"Heartbeat interval: {seconds} seconds", flush=True)
             print("Simulator ready", flush=True)
-            if connector is not None:
+            if remote:
+                heartbeat = asyncio.create_task(charge_point.heartbeats(seconds))
+                reset_waiter = asyncio.create_task(charge_point.reset_requested.wait())
+                try:
+                    done, _ = await asyncio.wait(
+                        [heartbeat, reset_waiter, receiver],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if reset_waiter in done:
+                        # Allow the OCPP Reset response to flush before disconnect.
+                        await asyncio.sleep(0.1)
+                        await charge_point.shutdown_sessions(
+                            hard=charge_point.reset_type == "Hard"
+                        )
+                    else:
+                        for finished in done:
+                            await finished
+                finally:
+                    heartbeat.cancel()
+                    reset_waiter.cancel()
+                    await asyncio.gather(heartbeat, reset_waiter, return_exceptions=True)
+            elif connector is not None:
                 heartbeat = asyncio.create_task(charge_point.heartbeats(seconds))
                 try:
                     energy = await simulate_charge(
@@ -70,3 +99,9 @@ async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
         finally:
             receiver.cancel()
             await asyncio.gather(receiver, return_exceptions=True)
+    if remote and charge_point.reset_requested.is_set():
+        await run_charge_point(
+            cp=cp, url=url, ca=ca, vendor=vendor, model=model,
+            connect_timeout=connect_timeout, remote=True, connectors=connectors,
+            power_kw=power_kw, meter_interval=meter_interval,
+        )

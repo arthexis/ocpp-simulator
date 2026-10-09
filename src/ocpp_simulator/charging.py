@@ -21,6 +21,8 @@ async def simulate_charge(
     power_kw: float,
     duration: float,
     meter_interval: float = 1.0,
+    stop_event: asyncio.Event | None = None,
+    on_started=None,
 ) -> int:
     """Perform a complete charge; report cumulative energy in Wh."""
     if connector < 1 or not rfid or power_kw <= 0 or duration < 0 or meter_interval <= 0:
@@ -46,6 +48,8 @@ async def simulate_charge(
         if started.id_tag_info["status"] != "Accepted":
             raise RuntimeError("start_transaction_rejected")
         transaction_id = started.transaction_id
+        if on_started is not None:
+            on_started(transaction_id)
         await cp.call(call.StatusNotificationPayload(
             connector_id=connector, error_code="NoError", status="Charging",
         ))
@@ -53,7 +57,14 @@ async def simulate_charge(
         step = Decimal(str(meter_interval))
         while elapsed < total:
             period = min(step, total - elapsed)
-            await asyncio.sleep(float(period))
+            if stop_event is not None:
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=float(period))
+                    break
+                except asyncio.TimeoutError:
+                    pass
+            else:
+                await asyncio.sleep(float(period))
             elapsed += period
             wh = int((power * Decimal(1000) * elapsed / Decimal(3600)).to_integral_value())
             await cp.call(call.MeterValuesPayload(
@@ -62,7 +73,7 @@ async def simulate_charge(
                     SampledValue(value=str(wh), measurand="Energy.Active.Import.Register", unit="Wh"),
                 ])],
             ))
-        final_wh = int((power * Decimal(1000) * total / Decimal(3600)).to_integral_value())
+        final_wh = int((power * Decimal(1000) * elapsed / Decimal(3600)).to_integral_value())
         await cp.call(call.StopTransactionPayload(
             transaction_id=transaction_id, meter_stop=final_wh,
             timestamp=timestamp(), reason="Local",
