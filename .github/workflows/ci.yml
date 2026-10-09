@@ -69,9 +69,30 @@ jobs:
       - name: Tests
         run: timeout 180s python -m pytest -vv -s
 
+  ansible:
+    name: Ansible installer
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax
+        run: sh -n deploy.sh
+      - name: Install Ansible
+        run: python -m pip install ansible-core ansible-lint
+      - name: Playbook syntax
+        run: ANSIBLE_ROLES_PATH=ansible/roles ansible-playbook ansible/playbooks/install.yml -i localhost, --syntax-check
+      - name: Ansible lint
+        run: ANSIBLE_ROLES_PATH=ansible/roles ansible-lint --profile basic ansible/
+      - name: Deploy CLI with Ansible
+        run: ./deploy.sh
+      - name: Smoke installed CLI
+        run: "$HOME/.local/bin/ocpp-simulator --help"
+
   ci:
     name: CI
-    needs: [changes, docs, test]
+    needs: [changes, docs, test, ansible]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -82,6 +103,7 @@ jobs:
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           DOCS: ${{ needs.docs.result }}
           TEST: ${{ needs.test.result }}
+          ANSIBLE: ${{ needs.ansible.result }}
         run: |
           set -euo pipefail
           [[ "$CHANGES" == "success" ]] || exit 1
@@ -89,4 +111,5 @@ jobs:
             [[ "$DOCS" == "success" ]] || exit 1
           else
             [[ "$TEST" == "success" ]] || exit 1
+            [[ "$ANSIBLE" == "success" ]] || exit 1
           fi

@@ -1,0 +1,6 @@
+---
+- name: Install OCPP simulator CLI locally
+  hosts: all
+  gather_facts: true
+  roles:
+    - ocpp_simulator
