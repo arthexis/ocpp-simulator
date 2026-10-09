@@ -14,6 +14,7 @@ class Battery:
     soc: float = 30.0
     seed: int = 1
     energy_wh: float = 0.0
+    last_power_kw: float = 0.0
     _rng: random.Random = field(init=False, repr=False)
     _fluctuation: float = field(default=0.0, init=False)
 
@@ -38,6 +39,7 @@ class Battery:
         if seconds < 0:
             raise ValueError("elapsed seconds must be nonnegative")
         power = self.power_kw(ceiling_kw)
+        self.last_power_kw = power
         room_wh = max(0.0, self.capacity_kwh * 1000 * (100 - self.soc) / 100)
         delivered_wh = min(power * 1000 * seconds / 3600, room_wh)
         self.energy_wh += delivered_wh
