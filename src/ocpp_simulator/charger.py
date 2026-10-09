@@ -12,16 +12,20 @@ from ocpp.routing import on
 from ocpp_simulator.configuration import Configuration
 from ocpp_simulator.connectors import Connectors
 from ocpp_simulator.charging import simulate_charge
+from ocpp_simulator.battery import Battery
 
 
 class SimulatorChargePoint(OCPPChargePoint):
-    def __init__(self, charge_point_id, connection, *, vendor="Arthexis", model="Simulator", connectors=1, power_kw=7.2, meter_interval=5.0):
+    def __init__(self, charge_point_id, connection, *, vendor="Arthexis", model="Simulator", connectors=1, power_kw=7.2, meter_interval=5.0,
+                 battery_kwh=60.0, initial_soc=30.0, seed=1):
         super().__init__(charge_point_id, connection)
         self.vendor = vendor
         self.model = model
         self.registry = Connectors(connectors)
         self.config = Configuration(connectors, meter_interval=meter_interval)
         self.power_kw = power_kw
+        self.batteries = {c: Battery(capacity_kwh=battery_kwh, soc=initial_soc,
+                                    seed=seed + c) for c in range(1, connectors + 1)}
         self.reset_requested = asyncio.Event()
         self.reset_type = None
 
@@ -38,15 +42,20 @@ class SimulatorChargePoint(OCPPChargePoint):
             print(f"Heartbeat: {getattr(response, 'current_time', 'received')}", flush=True)
 
     async def _remote_session(self, connector, rfid, stop):
-        print(f"Remote start: connector {connector}, RFID {rfid}", flush=True)
+        battery = self.batteries[connector]
+        print(f"Remote start: connector {connector}, RFID {rfid}, battery {battery.soc:.1f}%", flush=True)
         try:
             energy = await simulate_charge(
                 self, connector=connector, rfid=rfid,
                 power_kw=self.power_kw, duration=86400,
                 meter_interval=float(self.config.values["MeterValueSampleInterval"][0]),
                 stop_event=stop,
+                battery=battery,
                 on_started=lambda tx: self._report_remote_start(connector, tx),
-                on_meter=lambda wh: print(f"Meter: connector {connector}, {wh} Wh", flush=True),
+                on_meter=lambda wh: print(
+                    f"Meter: connector {connector}, {wh} Wh, "
+                    f"{battery.last_power_kw:.2f} kW, battery {battery.soc:.1f}%", flush=True
+                ),
             )
             print(f"Remote transaction complete: {energy} Wh", flush=True)
         except Exception as exc:
@@ -65,7 +74,7 @@ class SimulatorChargePoint(OCPPChargePoint):
     async def on_remote_start(self, id_tag, connector_id=None, **kwargs):
         connector = connector_id or 1
         print(f"RemoteStartTransaction received: connector {connector}, RFID {id_tag}", flush=True)
-        if not self.registry.free(connector):
+        if not self.registry.free(connector) or self.batteries[connector].soc >= 100:
             return call_result.RemoteStartTransactionPayload(status="Rejected")
         stop = self.registry.reserve(connector)
         task = asyncio.create_task(self._remote_session(connector, id_tag, stop))

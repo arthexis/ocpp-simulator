@@ -24,6 +24,7 @@ async def simulate_charge(
     stop_event: asyncio.Event | None = None,
     on_started=None,
     on_meter=None,
+    battery=None,
 ) -> int:
     """Perform a complete charge; report cumulative energy in Wh."""
     if connector < 1 or not rfid or power_kw <= 0 or duration < 0 or meter_interval <= 0:
@@ -36,6 +37,7 @@ async def simulate_charge(
     cp._charging_connectors.add(connector)
     transaction_id = None
     elapsed = Decimal(0)
+    initial_battery_wh = battery.energy_wh if battery is not None else 0.0
     try:
         await cp.call(call.StatusNotificationPayload(
             connector_id=connector, error_code="NoError", status="Preparing",
@@ -56,7 +58,7 @@ async def simulate_charge(
         ))
         total = Decimal(str(duration))
         step = Decimal(str(meter_interval))
-        while elapsed < total:
+        while elapsed < total and (battery is None or battery.soc < 100):
             period = min(step, total - elapsed)
             if stop_event is not None:
                 try:
@@ -67,16 +69,25 @@ async def simulate_charge(
             else:
                 await asyncio.sleep(float(period))
             elapsed += period
-            wh = int((power * Decimal(1000) * elapsed / Decimal(3600)).to_integral_value())
+            if battery is not None:
+                live_power, total_wh = battery.advance(float(period), float(power))
+                wh = max(0, total_wh - round(initial_battery_wh))
+                sampled = [
+                    SampledValue(value=str(wh), measurand="Energy.Active.Import.Register", unit="Wh"),
+                    SampledValue(value=str(round(live_power * 1000)), measurand="Power.Active.Import", unit="W"),
+                    SampledValue(value=str(round(battery.soc, 2)), measurand="SoC", unit="Percent"),
+                ]
+            else:
+                wh = int((power * Decimal(1000) * elapsed / Decimal(3600)).to_integral_value())
+                sampled = [SampledValue(value=str(wh), measurand="Energy.Active.Import.Register", unit="Wh")]
             if on_meter is not None:
                 on_meter(wh)
             await cp.call(call.MeterValuesPayload(
                 connector_id=connector, transaction_id=transaction_id,
-                meter_value=[MeterValue(timestamp=timestamp(), sampled_value=[
-                    SampledValue(value=str(wh), measurand="Energy.Active.Import.Register", unit="Wh"),
-                ])],
+                meter_value=[MeterValue(timestamp=timestamp(), sampled_value=sampled)],
             ))
-        final_wh = int((power * Decimal(1000) * elapsed / Decimal(3600)).to_integral_value())
+        final_wh = (max(0, round(battery.energy_wh - initial_battery_wh)) if battery is not None else
+                    int((power * Decimal(1000) * elapsed / Decimal(3600)).to_integral_value()))
         await cp.call(call.StopTransactionPayload(
             transaction_id=transaction_id, meter_stop=final_wh,
             timestamp=timestamp(), reason="Local",

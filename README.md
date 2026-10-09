@@ -104,3 +104,25 @@ reconnecting; hard reset interrupts the simulated tasks before reconnecting.
 Configuration lives in memory and is reset on reconnect. The simulated
 primary/backup vendor keys are stored and returned but do **not** drive
 actual endpoint changes or failover yet. That is reserved for Chunk 4.
+
+## Natural battery simulation
+
+Remote-controlled sessions no longer need to run until manually stopped.
+Each connector has a simulated battery, initially 60 kWh at 30% charge.
+Charging holds approximately the configured power below 80% SOC, tapers
+toward 100%, and adds small seeded fluctuations. Once full, the simulator
+sends StopTransaction and returns the connector to Available. CSMS remote
+stop still works at any point.
+
+```sh
+ocpp-simulator run --cp SIM001 --url ws://127.0.0.1:9000/SIM001 \
+  --remote --connectors 2 --power 7.2 --meter-interval 5 \
+  --battery-kwh 60 --soc 30 --seed 7
+```
+
+The `--seed` provides reproducible power variation for debugging.
+MeterValues include cumulative energy (Wh), instantaneous power (W), and
+battery SOC (percent). The battery is simplified and intentionally does
+not model vehicle temperature, DC fast-charging chemistry, losses, or
+capacity degradation. This behavior applies to remote mode; the one-shot
+`--duration` scenario is unchanged.
