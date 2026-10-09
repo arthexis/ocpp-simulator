@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import signal
 import ssl
 from urllib.parse import urlsplit
 
@@ -38,6 +39,17 @@ async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
     if connectors < 1:
         raise ValueError("--connectors must be positive")
     ssl_context = tls_context(url, ca)
+    # SIGINT/SIGTERM should request an OCPP stop, not cancel in-flight calls.
+    # SIGKILL, power loss, and transport failures cannot send StopTransaction.
+    stopping = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    installed_signals = []
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(signum, stopping.set)
+            installed_signals.append(signum)
+        except (NotImplementedError, RuntimeError):
+            pass
     print(f"Connecting: {url}", flush=True)
     async with websockets.connect(
         url, subprotocols=["ocpp1.6"], ssl=ssl_context,
@@ -66,12 +78,16 @@ async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
             if remote:
                 heartbeat = asyncio.create_task(charge_point.heartbeats(seconds))
                 reset_waiter = asyncio.create_task(charge_point.reset_requested.wait())
+                shutdown_waiter = asyncio.create_task(stopping.wait())
                 try:
                     done, _ = await asyncio.wait(
-                        [heartbeat, reset_waiter, receiver],
+                        [heartbeat, reset_waiter, receiver, shutdown_waiter],
                         return_when=asyncio.FIRST_COMPLETED,
                     )
-                    if reset_waiter in done:
+                    if shutdown_waiter in done:
+                        print("Stopping active simulator transactions...", flush=True)
+                        await asyncio.wait_for(charge_point.shutdown_sessions(), timeout=15)
+                    elif reset_waiter in done:
                         # Allow the OCPP Reset response to flush before disconnect.
                         await asyncio.sleep(0.1)
                         await charge_point.shutdown_sessions(
@@ -83,25 +99,42 @@ async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
                 finally:
                     heartbeat.cancel()
                     reset_waiter.cancel()
-                    await asyncio.gather(heartbeat, reset_waiter, return_exceptions=True)
+                    shutdown_waiter.cancel()
+                    await asyncio.gather(heartbeat, reset_waiter, shutdown_waiter, return_exceptions=True)
             elif connector is not None:
                 heartbeat = asyncio.create_task(charge_point.heartbeats(seconds))
                 try:
                     energy = await simulate_charge(
                         charge_point, connector=connector, rfid=rfid,
                         power_kw=power_kw, duration=duration,
-                        meter_interval=meter_interval,
+                        meter_interval=meter_interval, stop_event=stopping,
                     )
                     print(f"Transaction complete: {energy} Wh", flush=True)
                 finally:
                     heartbeat.cancel()
                     await asyncio.gather(heartbeat, return_exceptions=True)
             else:
-                await charge_point.heartbeats(seconds)
+                heartbeat = asyncio.create_task(charge_point.heartbeats(seconds))
+                shutdown_waiter = asyncio.create_task(stopping.wait())
+                try:
+                    done, _ = await asyncio.wait(
+                        [heartbeat, shutdown_waiter, receiver],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if heartbeat in done:
+                        await heartbeat
+                    if receiver in done:
+                        await receiver
+                finally:
+                    heartbeat.cancel()
+                    shutdown_waiter.cancel()
+                    await asyncio.gather(heartbeat, shutdown_waiter, return_exceptions=True)
         finally:
             receiver.cancel()
             await asyncio.gather(receiver, return_exceptions=True)
-    if remote and charge_point.reset_requested.is_set():
+    for signum in installed_signals:
+        loop.remove_signal_handler(signum)
+    if remote and charge_point.reset_requested.is_set() and not stopping.is_set():
         await run_charge_point(
             cp=cp, url=url, ca=ca, vendor=vendor, model=model,
             connect_timeout=connect_timeout, remote=True, connectors=connectors,

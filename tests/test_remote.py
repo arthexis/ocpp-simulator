@@ -92,3 +92,19 @@ def test_configuration_keys_and_validation():
 async def test_remote_bad_connector():
     cp = Charger("SIM001", Connection(), connectors=2)
     assert (await cp.on_remote_start("TAG", connector_id=3)).status == "Rejected"
+
+
+@pytest.mark.asyncio
+async def test_graceful_shutdown_stops_active_transactions():
+    cp = Charger("SIM001", Connection(), connectors=2, meter_interval=0.01)
+    assert (await cp.on_remote_start("TAG1", connector_id=1)).status == "Accepted"
+    assert (await cp.on_remote_start("TAG2", connector_id=2)).status == "Accepted"
+    for _ in range(200):
+        if len(cp.registry.transactions) == 2:
+            break
+        await asyncio.sleep(0.005)
+    assert len(cp.registry.transactions) == 2
+    await asyncio.wait_for(cp.shutdown_sessions(), timeout=3)
+    stops = [event for event in cp.sent if isinstance(event, call.StopTransactionPayload)]
+    assert {event.transaction_id for event in stops} == {101, 102}
+    assert not cp.registry.transactions
