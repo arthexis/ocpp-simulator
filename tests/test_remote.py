@@ -19,6 +19,9 @@ class Connection:
 
 class Charger(SimulatorChargePoint):
     async def call(self, payload, **kwargs):
+        if not hasattr(self, 'sent'):
+            self.sent = []
+        self.sent.append(payload)
         if isinstance(payload, call.AuthorizePayload):
             return SimpleNamespace(id_tag_info={"status": "Accepted"})
         if isinstance(payload, call.StartTransactionPayload):
@@ -41,6 +44,15 @@ async def test_two_connectors_and_remote_stop():
             break
         await asyncio.sleep(0.01)
     assert set(cp.registry.transactions) == {101, 102}
+    for _ in range(100):
+        if len([p for p in cp.sent if isinstance(p, call.MeterValuesPayload)]) >= 2:
+            break
+        await asyncio.sleep(0.01)
+    samples = [p for p in cp.sent if isinstance(p, call.MeterValuesPayload)]
+    assert samples, "Remote charging must emit MeterValues while transaction is open"
+    assert {p.connector_id for p in samples} == {1, 2}
+    assert {p.transaction_id for p in samples} == {101, 102}
+    assert all(p.meter_value[0].sampled_value[0].unit == "Wh" for p in samples)
     assert cp.on_remote_stop(999).status == "Rejected"
     assert cp.on_remote_stop(101).status == "Accepted"
     await asyncio.wait_for(cp.registry.tasks[1], timeout=2)
