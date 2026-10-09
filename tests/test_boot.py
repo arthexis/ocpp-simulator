@@ -58,13 +58,34 @@ async def _exercise(url, ssl_context=None, ca=None):
         cp="SIM001", url=endpoint, ca=ca, vendor="Arthexis", model="Simulator"
     ))
     try:
-        await asyncio.wait_for(heartbeat.wait(), timeout=8)
-        assert booted.is_set()
+        heartbeat_waiter = asyncio.create_task(heartbeat.wait())
+        try:
+            done, _ = await asyncio.wait(
+                [task, heartbeat_waiter], timeout=8,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if task in done:
+                # Surface an underlying protocol exception instead of reporting
+                # a misleading timeout waiting for Heartbeat.
+                await task
+                raise AssertionError("simulator exited before heartbeat")
+            assert heartbeat_waiter in done, "simulator never sent heartbeat"
+            assert booted.is_set()
+        finally:
+            heartbeat_waiter.cancel()
+            await asyncio.gather(heartbeat_waiter, return_exceptions=True)
     finally:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        # Close the transport before cancelling the protocol task: some
+        # Python/websockets combinations wait for peer closure on cancellation.
         server.close()
-        await server.wait_closed()
+        try:
+            await asyncio.wait_for(server.wait_closed(), timeout=5)
+        finally:
+            task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=5)
+            except TimeoutError:
+                pytest.fail("simulator did not terminate after WebSocket shutdown")
 
 
 @pytest.mark.asyncio
