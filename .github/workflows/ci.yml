@@ -84,7 +84,7 @@ jobs:
       - name: Playbook syntax
         run: ANSIBLE_ROLES_PATH=ansible/roles ansible-playbook ansible/playbooks/install.yml -i localhost, --syntax-check
       - name: Ansible lint
-        run: ansible-lint --profile basic ansible/
+        run: ANSIBLE_ROLES_PATH=ansible/roles ansible-lint --profile basic ansible/
       - name: Deploy CLI with Ansible
         run: ./deploy.sh
       - name: Smoke installed CLI
