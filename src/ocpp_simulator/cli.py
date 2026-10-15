@@ -15,6 +15,7 @@ def build_parser():
     run.add_argument("--cp", required=True, help="Charge-point identity")
     run.add_argument("--url", required=True, help="Full ws:// or wss:// URL")
     run.add_argument("--ca", help="Trusted CA bundle for WSS certificate validation")
+    run.add_argument("--basic-user", help="HTTP Basic username (defaults to --cp)")
     run.add_argument("--basic-password", help="HTTP Basic password (username is --cp; visible in process arguments)")
     run.add_argument("--vendor", default="Arthexis")
     run.add_argument("--model", default="Simulator")
@@ -47,7 +48,7 @@ def main(argv=None):
             duration=args.duration, meter_interval=args.meter_interval,
             remote=args.remote, connectors=args.connectors,
             battery_kwh=args.battery_kwh, initial_soc=args.soc, seed=args.seed,
-            basic_password=args.basic_password,
+            basic_password=args.basic_password, basic_user=args.basic_user,
         ))
     except (OSError, ValueError, RuntimeError, TimeoutError) as exc:
         print(f"ocpp-simulator: {exc}", file=sys.stderr)
