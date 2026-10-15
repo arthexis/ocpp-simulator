@@ -73,7 +73,6 @@ async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
             cp, connection, vendor=vendor, model=model,
             connectors=connectors, power_kw=power_kw, meter_interval=meter_interval,
             battery_kwh=battery_kwh, initial_soc=initial_soc, seed=seed,
-            basic_password=basic_password,
         )
         receiver = asyncio.create_task(charge_point.start())
         try:
@@ -152,4 +151,5 @@ async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
             connect_timeout=connect_timeout, remote=True, connectors=connectors,
             power_kw=power_kw, meter_interval=meter_interval,
             battery_kwh=battery_kwh, initial_soc=initial_soc, seed=seed,
+            basic_password=basic_password,
         )
