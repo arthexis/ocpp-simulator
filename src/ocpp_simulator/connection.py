@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import signal
 import ssl
 from urllib.parse import urlsplit
@@ -31,7 +32,8 @@ async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
                            power_kw: float = 7.2, duration: float = 60.0,
                            meter_interval: float = 1.0, remote: bool = False,
                            connectors: int = 1, battery_kwh: float = 60.0,
-                           initial_soc: float = 30.0, seed: int = 1) -> None:
+                           initial_soc: float = 30.0, seed: int = 1,
+                           basic_password: str | None = None) -> None:
     if not cp or "/" in cp:
         raise ValueError("--cp must be a non-empty charge-point identifier without '/'")
     if remote and connector is not None:
@@ -39,6 +41,14 @@ async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
     if connectors < 1:
         raise ValueError("--connectors must be positive")
     ssl_context = tls_context(url, ca)
+    if basic_password is not None and not basic_password:
+        raise ValueError("--basic-password cannot be empty")
+    if basic_password is not None and not url.startswith("wss://"):
+        raise ValueError("--basic-password requires a wss:// endpoint")
+    headers = None
+    if basic_password is not None:
+        encoded = base64.b64encode(f"{cp}:{basic_password}".encode("utf-8")).decode("ascii")
+        headers = {"Authorization": f"Basic {encoded}"}
     # SIGINT/SIGTERM should request an OCPP stop, not cancel in-flight calls.
     # SIGKILL, power loss, and transport failures cannot send StopTransaction.
     stopping = asyncio.Event()
@@ -54,6 +64,7 @@ async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
     async with websockets.connect(
         url, subprotocols=["ocpp1.6"], ssl=ssl_context,
         open_timeout=connect_timeout, close_timeout=5,
+        extra_headers=headers,
     ) as connection:
         if connection.subprotocol != "ocpp1.6":
             raise RuntimeError("CSMS did not negotiate ocpp1.6")
@@ -62,6 +73,7 @@ async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
             cp, connection, vendor=vendor, model=model,
             connectors=connectors, power_kw=power_kw, meter_interval=meter_interval,
             battery_kwh=battery_kwh, initial_soc=initial_soc, seed=seed,
+            basic_password=basic_password,
         )
         receiver = asyncio.create_task(charge_point.start())
         try:
