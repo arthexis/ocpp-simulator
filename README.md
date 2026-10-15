@@ -49,6 +49,18 @@ WebSocket subprotocol, sends BootNotification, requires Accepted status, and
 sends Heartbeats at the interval returned by the server. It exits on failures;
 automatic reconnect/failover is deliberately deferred.
 
+For protected WSS endpoints, supply `--basic-password PASSWORD`. The HTTP Basic
+username defaults to the `--cp` identifier, but `--basic-user` overrides it. The password is passed in the WebSocket
+handshake, not in the URL. **Warning:** command-line arguments can be visible
+to other local processes and may be recorded in shell history. Use only
+temporary test credentials; do not use a production charger identity.
+
+```sh
+ocpp-simulator run --cp SIM001 --url wss://csms.example.test/SIM001 --basic-password PASSWORD
+# To override the HTTP Basic username:
+ocpp-simulator run --cp SIM001 --url wss://csms.example.test/SIM001 --basic-user AUTH_USER --basic-password PASSWORD
+```
+
 For WSS, hostname validation and certificate-chain validation are enabled by
 default. `--ca` adds a custom CA bundle, suitable for a private test CA.
 There is no insecure TLS mode. Do not use a production charger identity against
