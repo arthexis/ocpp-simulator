@@ -33,7 +33,8 @@ async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
                            meter_interval: float = 1.0, remote: bool = False,
                            connectors: int = 1, battery_kwh: float = 60.0,
                            initial_soc: float = 30.0, seed: int = 1,
-                           basic_password: str | None = None) -> None:
+                           basic_password: str | None = None,
+                           basic_user: str | None = None) -> None:
     if not cp or "/" in cp:
         raise ValueError("--cp must be a non-empty charge-point identifier without '/'")
     if remote and connector is not None:
@@ -45,9 +46,13 @@ async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
         raise ValueError("--basic-password cannot be empty")
     if basic_password is not None and not url.startswith("wss://"):
         raise ValueError("--basic-password requires a wss:// endpoint")
+    if basic_user is not None and not basic_user:
+        raise ValueError("--basic-user cannot be empty")
+    if basic_user is not None and basic_password is None:
+        raise ValueError("--basic-user requires --basic-password")
     headers = None
     if basic_password is not None:
-        encoded = base64.b64encode(f"{cp}:{basic_password}".encode("utf-8")).decode("ascii")
+        encoded = base64.b64encode(f"{basic_user if basic_user is not None else cp}:{basic_password}".encode("utf-8")).decode("ascii")
         headers = {"Authorization": f"Basic {encoded}"}
     # SIGINT/SIGTERM should request an OCPP stop, not cancel in-flight calls.
     # SIGKILL, power loss, and transport failures cannot send StopTransaction.
@@ -151,5 +156,5 @@ async def run_charge_point(*, cp: str, url: str, ca: str | None, vendor: str,
             connect_timeout=connect_timeout, remote=True, connectors=connectors,
             power_kw=power_kw, meter_interval=meter_interval,
             battery_kwh=battery_kwh, initial_soc=initial_soc, seed=seed,
-            basic_password=basic_password,
+            basic_password=basic_password, basic_user=basic_user,
         )
