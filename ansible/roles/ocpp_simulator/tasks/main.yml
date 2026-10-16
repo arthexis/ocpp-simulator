@@ -7,6 +7,17 @@
       - ansible_facts.python.version.minor | int >= 11
     fail_msg: OCPP simulator requires a non-root account with Python 3.11 or newer.
 
+- name: Identify checkout revision
+  ansible.builtin.command:
+    argv: [git, -C, "{{ ocpp_simulator_source }}", rev-parse, --short=12, HEAD]
+  register: simulator_revision
+  changed_when: false
+
+- name: Select immutable release paths
+  ansible.builtin.set_fact:
+    simulator_release: "{{ ocpp_simulator_prefix }}/releases/{{ simulator_revision.stdout }}"
+    simulator_current: "{{ ocpp_simulator_prefix }}/current"
+
 - name: Create simulator installation directories
   ansible.builtin.file:
     path: "{{ item }}"
@@ -14,39 +25,57 @@
     mode: "0755"
   loop:
     - "{{ ocpp_simulator_prefix }}"
+    - "{{ ocpp_simulator_prefix }}/releases"
     - "{{ ocpp_simulator_bin_dir }}"
 
-- name: Create Python virtual environment
-  ansible.builtin.command:
-    argv:
-      - "{{ ocpp_simulator_python }}"
-      - -m
-      - venv
-      - "{{ ocpp_simulator_prefix }}/venv"
-    creates: "{{ ocpp_simulator_prefix }}/venv/bin/python"
+- name: Inspect requested release
+  ansible.builtin.stat:
+    path: "{{ simulator_release }}/bin/ocpp-simulator"
+  register: simulator_existing
 
-- name: Install simulator from this checkout
+- name: Verify existing release before reuse
+  ansible.builtin.command:
+    argv: ["{{ simulator_release }}/bin/ocpp-simulator", --help]
+  changed_when: false
+  when: simulator_existing.stat.exists
+
+- name: Create versioned virtual environment
+  ansible.builtin.command:
+    argv: ["{{ ocpp_simulator_python }}", -m, venv, "{{ simulator_release }}"]
+    creates: "{{ simulator_release }}/bin/python"
+  when: not simulator_existing.stat.exists
+
+- name: Install requested checkout into versioned release
   ansible.builtin.command:
     argv:
-      - "{{ ocpp_simulator_prefix }}/venv/bin/python"
+      - "{{ simulator_release }}/bin/python"
       - -m
       - pip
       - install
       - --disable-pip-version-check
       - "{{ ocpp_simulator_source }}"
-  register: ocpp_simulator_install
-  changed_when: "'Successfully installed' in ocpp_simulator_install.stdout"
+  when: not simulator_existing.stat.exists
+
+- name: Verify requested release
+  ansible.builtin.command:
+    argv: ["{{ simulator_release }}/bin/ocpp-simulator", --help]
+  changed_when: false
+
+- name: Activate requested revision
+  ansible.builtin.file:
+    src: "{{ simulator_release }}"
+    dest: "{{ simulator_current }}"
+    state: link
+    force: true
 
 - name: Expose CLI in user bin directory
   ansible.builtin.file:
-    src: "{{ ocpp_simulator_prefix }}/venv/bin/ocpp-simulator"
+    src: "{{ simulator_current }}/bin/ocpp-simulator"
     dest: "{{ ocpp_simulator_bin_dir }}/ocpp-simulator"
     state: link
     force: true
 
-- name: Verify installed command
+- name: Verify active command
   ansible.builtin.command:
-    argv:
-      - "{{ ocpp_simulator_bin_dir }}/ocpp-simulator"
-      - --help
+    argv: ["{{ ocpp_simulator_bin_dir }}/ocpp-simulator", --help]
   changed_when: false
