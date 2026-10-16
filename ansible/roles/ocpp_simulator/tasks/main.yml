@@ -28,22 +28,54 @@
     - "{{ ocpp_simulator_prefix }}/releases"
     - "{{ ocpp_simulator_bin_dir }}"
 
-- name: Inspect requested release
+- name: Inspect immutable release directory
   ansible.builtin.stat:
-    path: "{{ simulator_release }}/bin/ocpp-simulator"
+    path: "{{ simulator_release }}"
+    follow: false
   register: simulator_existing
 
-- name: Verify existing release before reuse
+- name: Verify existing release distribution and provenance
+  ansible.builtin.command:
+    argv:
+      - "{{ simulator_release }}/bin/python"
+      - -c
+      - >-
+        from importlib.metadata import distribution;
+        from pathlib import Path;
+        import ocpp_simulator;
+        d = distribution('ocpp-simulator');
+        assert d.version;
+        assert Path(ocpp_simulator.__file__).resolve().is_relative_to(Path('{{ simulator_release }}').resolve());
+        assert Path('{{ simulator_release }}/bin/ocpp-simulator').is_file()
+  register: simulator_release_probe
+  changed_when: false
+  failed_when: false
+  when: simulator_existing.stat.exists | default(false)
+
+- name: Verify existing release executable
   ansible.builtin.command:
     argv: ["{{ simulator_release }}/bin/ocpp-simulator", --help]
+  register: simulator_command_probe
   changed_when: false
-  when: simulator_existing.stat.exists
+  failed_when: false
+  when:
+    - simulator_existing.stat.exists | default(false)
+    - simulator_release_probe.rc | default(1) == 0
+
+- name: Reject incomplete immutable release without modifying it
+  ansible.builtin.assert:
+    that:
+      - simulator_existing.stat.isdir | default(false)
+      - simulator_release_probe.rc | default(1) == 0
+      - simulator_command_probe.rc | default(1) == 0
+    fail_msg: Existing simulator release is incomplete; refusing to modify it in place.
+  when: simulator_existing.stat.exists | default(false)
 
 - name: Create versioned virtual environment
   ansible.builtin.command:
     argv: ["{{ ocpp_simulator_python }}", -m, venv, "{{ simulator_release }}"]
     creates: "{{ simulator_release }}/bin/python"
-  when: not simulator_existing.stat.exists
+  when: not (simulator_existing.stat.exists | default(false))
 
 - name: Install requested checkout into versioned release
   ansible.builtin.command:
@@ -54,7 +86,7 @@
       - install
       - --disable-pip-version-check
       - "{{ ocpp_simulator_source }}"
-  when: not simulator_existing.stat.exists
+  when: not (simulator_existing.stat.exists | default(false))
 
 - name: Verify requested release
   ansible.builtin.command:
