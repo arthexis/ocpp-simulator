@@ -10,13 +10,13 @@
 - name: Identify checkout revision
   ansible.builtin.command:
     argv: [git, -C, "{{ ocpp_simulator_source }}", rev-parse, --short=12, HEAD]
-  register: simulator_revision
+  register: ocpp_simulator_revision
   changed_when: false
 
 - name: Select immutable release paths
   ansible.builtin.set_fact:
-    simulator_release: "{{ ocpp_simulator_prefix }}/releases/{{ simulator_revision.stdout }}"
-    simulator_current: "{{ ocpp_simulator_prefix }}/current"
+    ocpp_simulator_release: "{{ ocpp_simulator_prefix }}/releases/{{ ocpp_simulator_revision.stdout }}"
+    ocpp_simulator_current: "{{ ocpp_simulator_prefix }}/current"
 
 - name: Create simulator installation directories
   ansible.builtin.file:
@@ -30,14 +30,14 @@
 
 - name: Inspect immutable release directory
   ansible.builtin.stat:
-    path: "{{ simulator_release }}"
+    path: "{{ ocpp_simulator_release }}"
     follow: false
-  register: simulator_existing
+  register: ocpp_simulator_existing
 
 - name: Verify existing release distribution and provenance
   ansible.builtin.command:
     argv:
-      - "{{ simulator_release }}/bin/python"
+      - "{{ ocpp_simulator_release }}/bin/python"
       - -c
       - >-
         from importlib.metadata import distribution;
@@ -45,64 +45,64 @@
         import ocpp_simulator;
         d = distribution('ocpp-simulator');
         assert d.version;
-        assert Path(ocpp_simulator.__file__).resolve().is_relative_to(Path('{{ simulator_release }}').resolve());
-        assert Path('{{ simulator_release }}/bin/ocpp-simulator').is_file()
-  register: simulator_release_probe
+        assert Path(ocpp_simulator.__file__).resolve().is_relative_to(Path('{{ ocpp_simulator_release }}').resolve());
+        assert Path('{{ ocpp_simulator_release }}/bin/ocpp-simulator').is_file()
+  register: ocpp_ocpp_simulator_release_probe
   changed_when: false
   failed_when: false
-  when: simulator_existing.stat.exists | default(false)
+  when: ocpp_simulator_existing.stat.exists | default(false)
 
 - name: Verify existing release executable
   ansible.builtin.command:
-    argv: ["{{ simulator_release }}/bin/ocpp-simulator", --help]
-  register: simulator_command_probe
+    argv: ["{{ ocpp_simulator_release }}/bin/ocpp-simulator", --help]
+  register: ocpp_simulator_command_probe
   changed_when: false
   failed_when: false
   when:
-    - simulator_existing.stat.exists | default(false)
-    - simulator_release_probe.rc | default(1) == 0
+    - ocpp_simulator_existing.stat.exists | default(false)
+    - ocpp_ocpp_simulator_release_probe.rc | default(1) == 0
 
 - name: Reject incomplete immutable release without modifying it
   ansible.builtin.assert:
     that:
-      - simulator_existing.stat.isdir | default(false)
-      - simulator_release_probe.rc | default(1) == 0
-      - simulator_command_probe.rc | default(1) == 0
+      - ocpp_simulator_existing.stat.isdir | default(false)
+      - ocpp_ocpp_simulator_release_probe.rc | default(1) == 0
+      - ocpp_simulator_command_probe.rc | default(1) == 0
     fail_msg: Existing simulator release is incomplete; refusing to modify it in place.
-  when: simulator_existing.stat.exists | default(false)
+  when: ocpp_simulator_existing.stat.exists | default(false)
 
 - name: Create versioned virtual environment
   ansible.builtin.command:
-    argv: ["{{ ocpp_simulator_python }}", -m, venv, "{{ simulator_release }}"]
-    creates: "{{ simulator_release }}/bin/python"
-  when: not (simulator_existing.stat.exists | default(false))
+    argv: ["{{ ocpp_simulator_python }}", -m, venv, "{{ ocpp_simulator_release }}"]
+    creates: "{{ ocpp_simulator_release }}/bin/python"
+  when: not (ocpp_simulator_existing.stat.exists | default(false))
 
 - name: Install requested checkout into versioned release
   ansible.builtin.command:
     argv:
-      - "{{ simulator_release }}/bin/python"
+      - "{{ ocpp_simulator_release }}/bin/python"
       - -m
       - pip
       - install
       - --disable-pip-version-check
       - "{{ ocpp_simulator_source }}"
-  when: not (simulator_existing.stat.exists | default(false))
+  when: not (ocpp_simulator_existing.stat.exists | default(false))
 
 - name: Verify requested release
   ansible.builtin.command:
-    argv: ["{{ simulator_release }}/bin/ocpp-simulator", --help]
+    argv: ["{{ ocpp_simulator_release }}/bin/ocpp-simulator", --help]
   changed_when: false
 
 - name: Activate requested revision
   ansible.builtin.file:
-    src: "{{ simulator_release }}"
-    dest: "{{ simulator_current }}"
+    src: "{{ ocpp_simulator_release }}"
+    dest: "{{ ocpp_simulator_current }}"
     state: link
     force: true
 
 - name: Expose CLI in user bin directory
   ansible.builtin.file:
-    src: "{{ simulator_current }}/bin/ocpp-simulator"
+    src: "{{ ocpp_simulator_current }}/bin/ocpp-simulator"
     dest: "{{ ocpp_simulator_bin_dir }}/ocpp-simulator"
     state: link
     force: true
