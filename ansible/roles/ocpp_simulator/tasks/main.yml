@@ -47,7 +47,7 @@
         assert d.version;
         assert Path(ocpp_simulator.__file__).resolve().is_relative_to(Path('{{ ocpp_simulator_release }}').resolve());
         assert Path('{{ ocpp_simulator_release }}/bin/ocpp-simulator').is_file()
-  register: ocpp_ocpp_simulator_release_probe
+  register: ocpp_simulator_release_probe
   changed_when: false
   failed_when: false
   when: ocpp_simulator_existing.stat.exists | default(false)
@@ -60,13 +60,13 @@
   failed_when: false
   when:
     - ocpp_simulator_existing.stat.exists | default(false)
-    - ocpp_ocpp_simulator_release_probe.rc | default(1) == 0
+    - ocpp_simulator_release_probe.rc | default(1) == 0
 
 - name: Reject incomplete immutable release without modifying it
   ansible.builtin.assert:
     that:
       - ocpp_simulator_existing.stat.isdir | default(false)
-      - ocpp_ocpp_simulator_release_probe.rc | default(1) == 0
+      - ocpp_simulator_release_probe.rc | default(1) == 0
       - ocpp_simulator_command_probe.rc | default(1) == 0
     fail_msg: Existing simulator release is incomplete; refusing to modify it in place.
   when: ocpp_simulator_existing.stat.exists | default(false)
