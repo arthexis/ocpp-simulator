@@ -34,7 +34,7 @@ func (o ChargeOptions) Validate() error {
 		math.IsInf(o.Duration.Seconds(), 0) {
 		return fmt.Errorf("invalid one-shot charging parameters")
 	}
-	if o.PowerKW*1000*o.Duration.Seconds()/3600 > float64(math.MaxInt32) {
+	if o.PowerKW*1000*o.Duration.Seconds()/3600 > float64(1<<31-1) {
 		return fmt.Errorf("energy exceeds supported OCPP meter range")
 	}
 	return nil
