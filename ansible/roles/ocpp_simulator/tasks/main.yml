@@ -7,16 +7,23 @@
       - ansible_facts.python.version.minor | int >= 11
     fail_msg: OCPP simulator requires a non-root account with Python 3.11 or newer.
 
-- name: Identify checkout revision
+- name: Identify complete checkout revision
   ansible.builtin.command:
-    argv: [git, -C, "{{ ocpp_simulator_source }}", rev-parse, --short=12, HEAD]
+    argv: [git, -C, "{{ ocpp_simulator_source }}", rev-parse, --verify, HEAD]
   register: ocpp_simulator_revision
   changed_when: false
+
+- name: Validate immutable revision identifier
+  ansible.builtin.assert:
+    that:
+      - ocpp_simulator_revision.stdout is match('^[0-9a-f]{40}$')
+    fail_msg: A full 40-character Git commit is required for immutable releases.
 
 - name: Select immutable release paths
   ansible.builtin.set_fact:
     ocpp_simulator_release: "{{ ocpp_simulator_prefix }}/releases/{{ ocpp_simulator_revision.stdout }}"
     ocpp_simulator_current: "{{ ocpp_simulator_prefix }}/current"
+    ocpp_simulator_previous: "{{ ocpp_simulator_prefix }}/previous"
 
 - name: Create simulator installation directories
   ansible.builtin.file:
@@ -34,7 +41,7 @@
     follow: false
   register: ocpp_simulator_existing
 
-- name: Verify existing release distribution and provenance
+- name: Verify existing release provenance and installation
   ansible.builtin.command:
     argv:
       - "{{ ocpp_simulator_release }}/bin/python"
@@ -43,10 +50,11 @@
         from importlib.metadata import distribution;
         from pathlib import Path;
         import ocpp_simulator;
-        d = distribution('ocpp-simulator');
-        assert d.version;
-        assert Path(ocpp_simulator.__file__).resolve().is_relative_to(Path('{{ ocpp_simulator_release }}').resolve());
-        assert Path('{{ ocpp_simulator_release }}/bin/ocpp-simulator').is_file()
+        root = Path('{{ ocpp_simulator_release }}').resolve();
+        assert (root / '.revision').read_text().strip() == '{{ ocpp_simulator_revision.stdout }}';
+        assert distribution('ocpp-simulator').version;
+        assert Path(ocpp_simulator.__file__).resolve().is_relative_to(root);
+        assert (root / 'bin/ocpp-simulator').is_file()
   register: ocpp_simulator_release_probe
   changed_when: false
   failed_when: false
@@ -68,7 +76,7 @@
       - ocpp_simulator_existing.stat.isdir | default(false)
       - ocpp_simulator_release_probe.rc | default(1) == 0
       - ocpp_simulator_command_probe.rc | default(1) == 0
-    fail_msg: Existing simulator release is incomplete; refusing to modify it in place.
+    fail_msg: Existing simulator release is incomplete or has mismatched provenance; refusing in-place repair.
   when: ocpp_simulator_existing.stat.exists | default(false)
 
 - name: Create versioned virtual environment
@@ -88,10 +96,54 @@
       - "{{ ocpp_simulator_source }}"
   when: not (ocpp_simulator_existing.stat.exists | default(false))
 
-- name: Verify requested release
+- name: Record release provenance
+  ansible.builtin.copy:
+    dest: "{{ ocpp_simulator_release }}/.revision"
+    content: "{{ ocpp_simulator_revision.stdout }}\n"
+    mode: "0644"
+  when: not (ocpp_simulator_existing.stat.exists | default(false))
+
+- name: Verify candidate release before activation
   ansible.builtin.command:
     argv: ["{{ ocpp_simulator_release }}/bin/ocpp-simulator", --help]
   changed_when: false
+
+- name: Inspect existing current release link
+  ansible.builtin.stat:
+    path: "{{ ocpp_simulator_current }}"
+    follow: false
+  register: ocpp_simulator_current_stat
+
+- name: Refuse unsafe current release path
+  ansible.builtin.assert:
+    that:
+      - ocpp_simulator_current_stat.stat.islnk | default(false)
+    fail_msg: Simulator current path exists but is not a managed symlink.
+  when: ocpp_simulator_current_stat.stat.exists | default(false) or
+        ocpp_simulator_current_stat.stat.islnk | default(false)
+
+- name: Read currently active release target
+  ansible.builtin.command:
+    argv: [readlink, "{{ ocpp_simulator_current }}"]
+  register: ocpp_simulator_old_target
+  changed_when: false
+  when: ocpp_simulator_current_stat.stat.islnk | default(false)
+
+- name: Determine whether activation is necessary
+  ansible.builtin.set_fact:
+    ocpp_simulator_activate: >-
+      {{ ocpp_simulator_old_target.stdout | default('') != ocpp_simulator_release }}
+
+- name: Preserve previous release before changing current
+  ansible.builtin.file:
+    src: "{{ ocpp_simulator_old_target.stdout }}"
+    dest: "{{ ocpp_simulator_previous }}"
+    state: link
+    force: true
+  when:
+    - ocpp_simulator_activate | bool
+    - ocpp_simulator_current_stat.stat.islnk | default(false)
+    - ocpp_simulator_old_target.stdout | default('') != ''
 
 - name: Activate requested revision
   ansible.builtin.file:
@@ -99,6 +151,7 @@
     dest: "{{ ocpp_simulator_current }}"
     state: link
     force: true
+  when: ocpp_simulator_activate | bool
 
 - name: Expose CLI in user bin directory
   ansible.builtin.file:
