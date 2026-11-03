@@ -13,15 +13,15 @@ python -m pip install -e '.[dev]'
 
 ## Deploy the CLI with Ansible
 
-On a Debian machine with Python 3.11+, `python3-venv`, `python3-pip`, and
-`ansible-playbook` installed, run from a checkout:
+On a Debian machine with Python 3.11+, `python3-venv`, `python3-pip`,
+Go 1.23+, and `ansible-playbook` installed, run from a checkout:
 
 ```sh
 sh deploy.sh
 ~/.local/bin/ocpp-simulator --help
 ```
 
-The role installs a non-editable Python CLI into a **full 40-character
+The role installs Python and Go CLI backends into a **full 40-character
 Git SHA** release under
 `~/.local/share/ocpp-simulator/releases/<sha>/`. Only after successfully
 validating the candidate does it update `current`; the old installed
@@ -62,9 +62,8 @@ ocpp-simulator --backend python run --cp SIM001 --url ws://127.0.0.1:9000/SIM001
 ocpp-simulator-py run --cp SIM001 --url ws://127.0.0.1:9000/SIM001
 ```
 
-The Go backend is opt-in. To build it for the installed immutable release,
-install **Go 1.23+** and use `./deploy.sh --with-go` on a new checkout
-revision (existing immutable releases are never modified in place).
+Both backends are installed by a normal `./deploy.sh` (Go 1.23+ required
+at install time). Existing immutable releases are never modified in place.
 The command installs `ocpp-simulator-go` and enables:
 
 ```sh
