@@ -22,7 +22,7 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o /tmp/ocpp-simulator-go ./cmd/o
 cd go
 go run ./cmd/ocpp-simulator-go run --cp SIM001 --url ws://127.0.0.1:9000/SIM001
 
-# Installed with ./deploy.sh --with-go:
+# Installed with ./deploy.sh:
 ocpp-simulator --backend go run --cp SIM001 --url wss://example.test/SIM001 --ca ./test-ca.pem
 # Default remains Python, including its charge, remote and battery features:
 ocpp-simulator run --cp SIM001 --url ws://127.0.0.1:9000/SIM001
@@ -45,13 +45,14 @@ message validation.
 
 ## Packaging and caveats
 
-`./deploy.sh` installs only the Python backend and needs no Go compiler.
-`./deploy.sh --with-go` opts in to a Go 1.23+ compilation in the immutable
-release. Both modes preserve Ansible's revision and owner lock conventions.
+Run `./deploy.sh` to install **both** Python and Go into the same
+immutable release; Go 1.23+ must be available on the target at build time.
+The installer preserves Ansible's revision and owner lock conventions.
 Existing immutable Python-only releases must **not** be mutated to add Go;
-build both backends from a new commit. The installed Go executable is
-`~/.local/bin/ocpp-simulator-go` and the normal dispatcher resolves the
-binary from the active Python virtualenv.
+deploy a new revision instead. The installed Go executable is
+`~/.local/bin/ocpp-simulator-go` and the normal dispatcher finds the
+binary next to the release virtualenv interpreter. Python remains the
+default execution backend until explicitly switched.
 
 The G1 test matrix includes an independent ephemeral OCPP-J server, timed
 Heartbeats, strict WebSocket subprotocol negotiation, untrusted certificate
