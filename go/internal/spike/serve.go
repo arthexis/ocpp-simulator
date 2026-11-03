@@ -20,6 +20,7 @@ type ServeOptions struct {
 	Options
 	CA, BasicUser, BasicPassword string
 	ConnectTimeout time.Duration
+	Charge *ChargeOptions
 }
 
 var cpName = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
@@ -49,6 +50,7 @@ func ValidateServe(o ServeOptions) error {
 	if o.ConnectTimeout <= 0 || o.ConnectTimeout > 120*time.Second {
 		return fmt.Errorf("--connect-timeout must be between 0 and 120 seconds")
 	}
+	if o.Charge != nil { if err := o.Charge.Validate(); err != nil { return err } }
 	return nil
 }
 
@@ -121,10 +123,25 @@ func Serve(ctx context.Context, o ServeOptions) error {
 	fmt.Printf("BootNotification: Accepted (heartbeat %ds)\n", interval)
 	ticker := time.NewTicker(time.Duration(interval)*time.Second)
 	defer ticker.Stop()
+	var chargingDone <-chan error
+	if o.Charge != nil {
+		finished := make(chan error,1)
+		chargingDone = finished
+		go func(){ _, chargeErr := Charge(ctx,cp,*o.Charge); finished <- chargeErr }()
+	}
 	for {
 		select {
-		case <-ctx.Done(): return nil
+		case <-ctx.Done():
+			if chargingDone != nil {
+				// Permit an interrupted one-shot transaction to send StopTransaction.
+				select {
+				case err := <-chargingDone: return err
+				case <-time.After(15*time.Second): return fmt.Errorf("charge shutdown timeout; transaction may remain open")
+				}
+			}
+			return nil
 		case err := <-client.Disconnected(): return fmt.Errorf("CSMS disconnected: %w", err)
+		case err := <-chargingDone: return err
 		case <-ticker.C:
 			type response struct{ err error }
 			reply := make(chan response, 1)
