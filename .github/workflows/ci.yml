@@ -90,7 +90,7 @@ jobs:
       - name: Ansible lint
         run: ANSIBLE_ROLES_PATH=ansible/roles ansible-lint --profile basic ansible/
       - name: Deploy both backends with Ansible
-        run: ./deploy.sh --with-go
+        run: ./deploy.sh
       - name: Smoke installed CLI and verify immutable release identity
         shell: bash
         run: |
@@ -106,7 +106,7 @@ jobs:
           "$HOME/.local/bin/ocpp-simulator" --backend go run --help
           "$HOME/.local/bin/ocpp-simulator" --backend python run --help
           # Same-SHA deploy must leave the current pointer unchanged.
-          ./deploy.sh --with-go
+          ./deploy.sh
           test "$(readlink "$root/current")" = "$root/releases/$sha"
           test ! -e "$root/previous"
 
