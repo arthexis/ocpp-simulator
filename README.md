@@ -13,15 +13,15 @@ python -m pip install -e '.[dev]'
 
 ## Deploy the CLI with Ansible
 
-On a Debian machine with Python 3.11+, `python3-venv`, `python3-pip`, and
-`ansible-playbook` installed, run from a checkout:
+On a Debian machine with Python 3.11+, `python3-venv`, `python3-pip`,
+Go 1.23+, and `ansible-playbook` installed, run from a checkout:
 
 ```sh
 sh deploy.sh
 ~/.local/bin/ocpp-simulator --help
 ```
 
-The role installs a non-editable Python CLI into a **full 40-character
+The role installs Python and Go CLI backends into a **full 40-character
 Git SHA** release under
 `~/.local/share/ocpp-simulator/releases/<sha>/`. Only after successfully
 validating the candidate does it update `current`; the old installed
@@ -49,6 +49,32 @@ no simulator-specific privileged setup is necessary. Ansible can
 also be invoked directly with
 `ANSIBLE_ROLES_PATH=ansible/roles ansible-playbook ansible/playbooks/install.yml -i localhost, -c local`.
 Direct Ansible invocation does **not** take the shell wrapper's deployment lock.
+
+## Select the simulator backend
+
+`ocpp-simulator` accepts `--backend python|go` before or after `run`.
+The default is **python**. `ocpp-simulator-py` is the explicit Python
+entry point; existing commands and charging behavior remain unchanged.
+
+```sh
+ocpp-simulator run --cp SIM001 --url ws://127.0.0.1:9000/SIM001
+ocpp-simulator --backend python run --cp SIM001 --url ws://127.0.0.1:9000/SIM001
+ocpp-simulator-py run --cp SIM001 --url ws://127.0.0.1:9000/SIM001
+```
+
+Both backends are installed by a normal `./deploy.sh` (Go 1.23+ required
+at install time). Existing immutable releases are never modified in place.
+The command installs `ocpp-simulator-go` and enables:
+
+```sh
+ocpp-simulator --backend go run --cp SIM001 --url wss://test.example.test/SIM001 --ca /path/to/ca.pem
+```
+
+In G1 the Go backend only implements boot and periodic heartbeat with
+WS/WSS, certificate validation, and optional WSS Basic Auth. Python-only
+charge/remote options are **rejected** rather than silently emulated.
+Go does not reconnect automatically. See [Go G1 instructions](go/README.md).
+No backend automatically starts a session during installation.
 
 ## Connect to a CSMS
 

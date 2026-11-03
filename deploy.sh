@@ -20,6 +20,10 @@ if [ "$#" -ne 0 ]; then
     echo "Usage: ./deploy.sh" >&2
     exit 2
 fi
+if ! command -v go >/dev/null 2>&1; then
+    echo "Go 1.23+ is required to build the simulator; install Go first." >&2
+    exit 1
+fi
 
 # CSMS/GWay-Remote convention: serialize owner deployment attempts.
 state_parent="$HOME/.local/state"

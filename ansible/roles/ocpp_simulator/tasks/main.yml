@@ -70,6 +70,24 @@
     - ocpp_simulator_existing.stat.exists | default(false)
     - ocpp_simulator_release_probe.rc | default(1) == 0
 
+- name: Inspect Go executable in immutable release
+  ansible.builtin.stat:
+    path: "{{ ocpp_simulator_release }}/bin/ocpp-simulator-go"
+  register: ocpp_simulator_existing_go
+  when:
+    - ocpp_simulator_existing.stat.exists | default(false)
+
+- name: Reject existing release lacking Go executable
+  ansible.builtin.assert:
+    that:
+      - ocpp_simulator_existing_go.stat.isreg | default(false)
+      - ocpp_simulator_existing_go.stat.executable | default(false)
+    fail_msg: >-
+      Existing immutable release lacks the Go backend; refusing in-place
+      modification. Use a new revision containing both backends.
+  when:
+    - ocpp_simulator_existing.stat.exists | default(false)
+
 - name: Reject incomplete immutable release without modifying it
   ansible.builtin.assert:
     that:
@@ -95,6 +113,44 @@
       - --disable-pip-version-check
       - "{{ ocpp_simulator_source }}"
   when: not (ocpp_simulator_existing.stat.exists | default(false))
+
+- name: Stage Go sources without modifying the Git checkout
+  ansible.builtin.copy:
+    src: "{{ ocpp_simulator_source }}/go/"
+    dest: "{{ ocpp_simulator_release }}/go-source/"
+    remote_src: true
+    mode: preserve
+  when:
+    - not (ocpp_simulator_existing.stat.exists | default(false))
+
+- name: Resolve Go module checksums in staged source
+  ansible.builtin.command:
+    argv: [go, mod, tidy]
+    chdir: "{{ ocpp_simulator_release }}/go-source"
+  environment:
+    GOTOOLCHAIN: local
+  when:
+    - not (ocpp_simulator_existing.stat.exists | default(false))
+
+- name: Build pinned Go backend into candidate release
+  ansible.builtin.command:
+    argv:
+      - go
+      - build
+      - -o
+      - "{{ ocpp_simulator_release }}/bin/ocpp-simulator-go"
+      - ./cmd/ocpp-simulator-go
+    chdir: "{{ ocpp_simulator_release }}/go-source"
+  environment:
+    GOTOOLCHAIN: local
+  when:
+    - not (ocpp_simulator_existing.stat.exists | default(false))
+
+- name: Verify Go backend
+  ansible.builtin.command:
+    argv: ["{{ ocpp_simulator_release }}/bin/ocpp-simulator-go", --help]
+  register: ocpp_simulator_go_probe
+  changed_when: false
 
 - name: Record release provenance
   ansible.builtin.copy:
@@ -174,7 +230,31 @@
     state: link
     force: true
 
+- name: Expose Go backend CLI in user bin directory
+  ansible.builtin.file:
+    src: "{{ ocpp_simulator_current }}/bin/ocpp-simulator-go"
+    dest: "{{ ocpp_simulator_bin_dir }}/ocpp-simulator-go"
+    state: link
+    force: true
+
+- name: Expose explicit Python backend CLI
+  ansible.builtin.file:
+    src: "{{ ocpp_simulator_current }}/bin/ocpp-simulator-py"
+    dest: "{{ ocpp_simulator_bin_dir }}/ocpp-simulator-py"
+    state: link
+    force: true
+
 - name: Verify active command
   ansible.builtin.command:
     argv: ["{{ ocpp_simulator_bin_dir }}/ocpp-simulator", --help]
+  changed_when: false
+
+- name: Verify explicit Python CLI
+  ansible.builtin.command:
+    argv: ["{{ ocpp_simulator_bin_dir }}/ocpp-simulator-py", --help]
+  changed_when: false
+
+- name: Verify Go backend dispatch
+  ansible.builtin.command:
+    argv: ["{{ ocpp_simulator_bin_dir }}/ocpp-simulator", --backend, go, --help]
   changed_when: false
