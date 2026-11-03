@@ -31,7 +31,8 @@ func Validate(o Options) error {
 func Run(o Options) error {
  if err:=Validate(o);err!=nil{return err}
  cp:=ocpp16.NewChargePoint(o.CP,nil,nil)
- // ocpp-go appends /<chargePointID> to its connection base URL.\n if err:=cp.Start(strings.TrimSuffix(o.URL, "/"+o.CP));err!=nil{return fmt.Errorf("connect: %w",err)}
+ // ocpp-go appends /<chargePointID> to its connection base URL.
+ if err:=cp.Start(strings.TrimSuffix(o.URL, "/"+o.CP));err!=nil{return fmt.Errorf("connect: %w",err)}
  defer cp.Stop()
  boot,err:=cp.BootNotification(o.Model,o.Vendor)
  if err!=nil{return fmt.Errorf("BootNotification: %w",err)}
