@@ -27,18 +27,31 @@ func run(args []string) error {
 	basicUser := flags.String("basic-user", "", "HTTP Basic username (defaults to --cp)")
 	basicPassword := flags.String("basic-password", "", "HTTP Basic password (WSS only; visible in process arguments)")
 	timeout := flags.Float64("connect-timeout", 10, "WebSocket handshake timeout in seconds")
+	connector := flags.Int("connector", 0, "run a single charging transaction then exit")
+	rfid := flags.String("rfid", "TEST001", "authorization identifier")
+	power := flags.Float64("power", 7.2, "charging power ceiling in kW")
+	duration := flags.Float64("duration", 60, "one-shot charging duration in seconds")
+	meterInterval := flags.Float64("meter-interval", 1, "meter sample interval in seconds")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) { return nil }
 		return err
 	}
 	if flags.NArg() != 0 { return fmt.Errorf("unexpected positional arguments: %v", flags.Args()) }
 	if *timeout <= 0 || *timeout > 120 { return fmt.Errorf("--connect-timeout must be positive and <=120s") }
+	if *connector < 0 || *duration < 0 || *meterInterval <= 0 || *duration > 86400 || *meterInterval > 86400 {
+		return fmt.Errorf("invalid charging duration or interval")
+	}
+	var charge *spike.ChargeOptions
+	if *connector > 0 {
+		charge = &spike.ChargeOptions{Connector:*connector, RFID:*rfid, PowerKW:*power,
+			Duration:time.Duration(*duration*float64(time.Second)), MeterInterval:time.Duration(*meterInterval*float64(time.Second))}
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return spike.Serve(ctx, spike.ServeOptions{
 		Options: spike.Options{CP:*cp, URL:*address, Vendor:*vendor, Model:*model},
 		CA:*ca, BasicUser:*basicUser, BasicPassword:*basicPassword,
-		ConnectTimeout:time.Duration(*timeout*float64(time.Second)),
+		ConnectTimeout:time.Duration(*timeout*float64(time.Second)), Charge:charge,
 	})
 }
 
