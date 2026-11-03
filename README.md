@@ -50,6 +50,33 @@ also be invoked directly with
 `ANSIBLE_ROLES_PATH=ansible/roles ansible-playbook ansible/playbooks/install.yml -i localhost, -c local`.
 Direct Ansible invocation does **not** take the shell wrapper's deployment lock.
 
+## Select the simulator backend
+
+`ocpp-simulator` accepts `--backend python|go` before or after `run`.
+The default is **python**. `ocpp-simulator-py` is the explicit Python
+entry point; existing commands and charging behavior remain unchanged.
+
+```sh
+ocpp-simulator run --cp SIM001 --url ws://127.0.0.1:9000/SIM001
+ocpp-simulator --backend python run --cp SIM001 --url ws://127.0.0.1:9000/SIM001
+ocpp-simulator-py run --cp SIM001 --url ws://127.0.0.1:9000/SIM001
+```
+
+The Go backend is opt-in. To build it for the installed immutable release,
+install **Go 1.23+** and use `./deploy.sh --with-go` on a new checkout
+revision (existing immutable releases are never modified in place).
+The command installs `ocpp-simulator-go` and enables:
+
+```sh
+ocpp-simulator --backend go run --cp SIM001 --url wss://test.example.test/SIM001 --ca /path/to/ca.pem
+```
+
+In G1 the Go backend only implements boot and periodic heartbeat with
+WS/WSS, certificate validation, and optional WSS Basic Auth. Python-only
+charge/remote options are **rejected** rather than silently emulated.
+Go does not reconnect automatically. See [Go G1 instructions](go/README.md).
+No backend automatically starts a session during installation.
+
 ## Connect to a CSMS
 
 ```sh
