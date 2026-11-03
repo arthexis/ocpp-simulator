@@ -134,6 +134,20 @@
     ocpp_simulator_activate: >-
       {{ ocpp_simulator_old_target.stdout | default('') != ocpp_simulator_release }}
 
+- name: Inspect existing previous release pointer
+  ansible.builtin.stat:
+    path: "{{ ocpp_simulator_previous }}"
+    follow: false
+  register: ocpp_simulator_previous_stat
+
+- name: Refuse unmanaged previous release path
+  ansible.builtin.assert:
+    that:
+      - ocpp_simulator_previous_stat.stat.islnk | default(false)
+    fail_msg: Simulator previous path exists but is not a managed symlink.
+  when: ocpp_simulator_previous_stat.stat.exists | default(false) or
+        ocpp_simulator_previous_stat.stat.islnk | default(false)
+
 - name: Preserve previous release before changing current
   ansible.builtin.file:
     src: "{{ ocpp_simulator_old_target.stdout }}"
