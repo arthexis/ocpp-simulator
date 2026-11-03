@@ -6,7 +6,6 @@ import (
  "fmt"
  "net/url"
  "strings"
- "time"
 
  ocpp16 "github.com/lorenzodonini/ocpp-go/ocpp1.6"
  "github.com/lorenzodonini/ocpp-go/ocpp1.6/core"
@@ -45,5 +44,3 @@ func Run(o Options) error {
  fmt.Printf("Heartbeat: %s\n",hb.CurrentTime.String())
  return nil
 }
-
-var _ = time.Second // intentional future heartbeat scheduling belongs to G1
