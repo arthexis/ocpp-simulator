@@ -62,7 +62,7 @@ def _go_executable():
     if override:
         path = Path(override).expanduser()
     else:
-        candidate = Path(sys.executable).resolve().parent / "ocpp-simulator-go"
+        candidate = Path(sys.executable).parent / "ocpp-simulator-go"
         path = candidate if candidate.is_file() else None
         if path is None:
             located = shutil.which("ocpp-simulator-go")
