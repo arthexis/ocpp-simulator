@@ -60,7 +60,7 @@ func (c *CheckedClient) Start(address string) error {
 	tlsCfg := c.tlsConfig
 	proto := c.protocol
 	headers := c.headers.Clone()
-	opts := append([]func(*websocket.Dialer)(nil), c.options...)
+	opts := append([]func(*websocket.Dialer){}, c.options...)
 	c.mu.Unlock()
 
 	d := websocket.Dialer{HandshakeTimeout: cfg.HandshakeTimeout, TLSClientConfig: tlsCfg}
