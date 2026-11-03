@@ -2,10 +2,8 @@ package spike
 
 import (
 	"context"
-	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -61,7 +59,7 @@ func wireHandler(t *testing.T, accepted bool, count *atomic.Int32, cancel contex
 				payload=map[string]any{"currentTime":"2026-11-03T17:00:00Z","interval":1,"status":"Accepted"}
 			case "Heartbeat":
 				payload=map[string]any{"currentTime":"2026-11-03T17:00:01Z"}
-				if count.Add(1)>=2 && cancel!=nil {defer cancel()}
+				if count.Add(1)>=2 && cancel!=nil {go func(){time.Sleep(25*time.Millisecond);cancel()}()}
 			default: return
 			}
 			if err:=ws.WriteJSON([]any{3,id,payload});err!=nil{return}
@@ -131,6 +129,3 @@ func TestG1RejectsInvalidCA(t *testing.T) {
 	o:=ServeOptions{Options:Options{CP:"SIM001",URL:"wss://localhost/SIM001",Vendor:"Arthexis",Model:"Simulator"},CA:p,ConnectTimeout:time.Second}
 	if err:=Serve(context.Background(),o);err==nil {t.Fatal("accepted invalid CA bundle")}
 }
-
-var _ = x509.Certificate{}
-var _ = fmt.Sprintf
