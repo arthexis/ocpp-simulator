@@ -16,20 +16,13 @@ if ! command -v flock >/dev/null 2>&1; then
     echo "flock is required for safe owner-scoped deployments." >&2
     exit 1
 fi
-with_go=0
-if [ "${1:-}" = "--with-go" ] && [ "$#" -eq 1 ]; then
-    with_go=1
-    shift
-fi
 if [ "$#" -ne 0 ]; then
-    echo "Usage: ./deploy.sh [--with-go]" >&2
+    echo "Usage: ./deploy.sh" >&2
     exit 2
 fi
-if [ "$with_go" -eq 1 ]; then
-    command -v go >/dev/null 2>&1 || {
-        echo "Go compiler required for --with-go (Go 1.23+)." >&2
-        exit 1
-    }
+if ! command -v go >/dev/null 2>&1; then
+    echo "Go 1.23+ is required to build the simulator; install Go first." >&2
+    exit 1
 fi
 
 # CSMS/GWay-Remote convention: serialize owner deployment attempts.
@@ -50,8 +43,7 @@ fi
 export ANSIBLE_ROLES_PATH="$ROOT/ansible/roles"
 started=$(date +%s)
 status=0
-ansible-playbook "$ROOT/ansible/playbooks/install.yml" -i localhost, -c local \
-    -e "ocpp_simulator_with_go=$([ "$with_go" -eq 1 ] && echo true || echo false)" || status=$?
+ansible-playbook "$ROOT/ansible/playbooks/install.yml" -i localhost, -c local || status=$?
 elapsed=$(($(date +%s) - started))
 printf 'OCPP simulator deployment completed in %ds (exit %s)\n' "$elapsed" "$status"
 exit "$status"
