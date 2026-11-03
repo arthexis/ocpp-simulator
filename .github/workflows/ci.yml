@@ -103,9 +103,35 @@ jobs:
           test ! -e "$root/previous"
 
 
+  go-spike:
+    name: Go OCPP spike
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache-dependency-path: go/go.mod
+      - name: Resolve pinned dependencies
+        run: go mod tidy
+      - name: Format Go spike
+        run: gofmt -w cmd internal
+      - name: Vet
+        run: go vet ./...
+      - name: Test loopback CSMS integration
+        run: go test -race -count=1 ./...
+      - name: Build Linux arm64
+        run: GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o /tmp/ocpp-simulator-go ./cmd/ocpp-simulator-go
+
   ci:
     name: CI
-    needs: [changes, docs, test, ansible]
+    needs: [changes, docs, test, ansible, go-spike]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -117,6 +143,7 @@ jobs:
           DOCS: ${{ needs.docs.result }}
           TEST: ${{ needs.test.result }}
           ANSIBLE: ${{ needs.ansible.result }}
+          GO_SPIKE: ${{ needs.go-spike.result }}
         run: |
           set -euo pipefail
           [[ "$CHANGES" == "success" ]] || exit 1
@@ -125,4 +152,5 @@ jobs:
           else
             [[ "$TEST" == "success" ]] || exit 1
             [[ "$ANSIBLE" == "success" ]] || exit 1
+            [[ "$GO_SPIKE" == "success" ]] || exit 1
           fi
