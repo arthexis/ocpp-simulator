@@ -3,13 +3,17 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
+from pathlib import Path
+import shutil
+import subprocess
 import sys
 
 from ocpp_simulator.connection import run_charge_point
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="ocpp-simulator")
+    parser = argparse.ArgumentParser(prog="ocpp-simulator", description="Use --backend {python,go} before or after run (default: python)")
     subs = parser.add_subparsers(dest="command")
     run = subs.add_parser("run", help="Connect a simulated charge point to a CSMS")
     run.add_argument("--cp", required=True, help="Charge-point identity")
@@ -34,7 +38,63 @@ def build_parser():
     return parser
 
 
+def _select_backend(argv):
+    """Extract backend from anywhere in the CLI, preserving Python's run flags."""
+    backend = "python"
+    remaining = []
+    iterator = iter(argv)
+    for token in iterator:
+        if token == "--backend":
+            backend = next(iterator, None)
+            if backend is None:
+                raise ValueError("--backend requires python or go")
+        elif token.startswith("--backend="):
+            backend = token.partition("=")[2]
+        else:
+            remaining.append(token)
+    if backend not in {"python", "go"}:
+        raise ValueError(f"Unsupported backend: {backend!r} (expected python or go)")
+    return backend, remaining
+
+
+def _go_executable():
+    override = os.environ.get("OCPP_SIMULATOR_GO_BIN")
+    if override:
+        path = Path(override).expanduser()
+    else:
+        candidate = Path(sys.executable).resolve().parent / "ocpp-simulator-go"
+        path = candidate if candidate.is_file() else None
+        if path is None:
+            located = shutil.which("ocpp-simulator-go")
+            path = Path(located) if located else None
+    if path is None or not path.is_file() or not os.access(path, os.X_OK):
+        raise RuntimeError(
+            "Go backend unavailable: install the Go binary with ./deploy.sh --with-go "
+            "or set OCPP_SIMULATOR_GO_BIN to a verified executable"
+        )
+    return str(path)
+
+
 def main(argv=None):
+    try:
+        backend, argv = _select_backend(list(sys.argv[1:] if argv is None else argv))
+    except ValueError as exc:
+        print(f"ocpp-simulator: {exc}", file=sys.stderr)
+        return 2
+    if backend == "go":
+        if not argv or argv[0] in {"help", "-h", "--help"}:
+            build_parser().print_help()
+            return 0
+        try:
+            completed = subprocess.run([_go_executable(), *argv], check=False)
+        except (OSError, RuntimeError) as exc:
+            print(f"ocpp-simulator: {exc}", file=sys.stderr)
+            return 1
+        return completed.returncode
+    return main_python(argv)
+
+
+def main_python(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command in (None, "help"):
