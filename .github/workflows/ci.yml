@@ -87,8 +87,21 @@ jobs:
         run: ANSIBLE_ROLES_PATH=ansible/roles ansible-lint --profile basic ansible/
       - name: Deploy CLI with Ansible
         run: ./deploy.sh
-      - name: Smoke installed CLI
-        run: "$HOME/.local/bin/ocpp-simulator --help"
+      - name: Smoke installed CLI and verify immutable release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse --verify HEAD)
+          root="$HOME/.local/share/ocpp-simulator"
+          test "$(readlink "$root/current")" = "$root/releases/$sha"
+          test "$(cat "$root/current/.revision")" = "$sha"
+          test "$(readlink "$HOME/.local/bin/ocpp-simulator")" = "$root/current/bin/ocpp-simulator"
+          "$HOME/.local/bin/ocpp-simulator" --help
+          # Same-SHA deploy must leave the current pointer unchanged.
+          ./deploy.sh
+          test "$(readlink "$root/current")" = "$root/releases/$sha"
+          test ! -e "$root/previous"
+
 
   ci:
     name: CI

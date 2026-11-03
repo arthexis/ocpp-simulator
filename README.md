@@ -21,20 +21,34 @@ sh deploy.sh
 ~/.local/bin/ocpp-simulator --help
 ```
 
-The role installs a non-editable Python package into
-`~/.local/share/ocpp-simulator/venv`, then links the installed entry point
-to `~/.local/bin/ocpp-simulator`. Ensure `~/.local/bin` is on `PATH` if
-you want to invoke the command without its full path.
+The role installs a non-editable Python CLI into a **full 40-character
+Git SHA** release under
+`~/.local/share/ocpp-simulator/releases/<sha>/`. Only after successfully
+validating the candidate does it update `current`; the old installed
+revision is retained as `previous` when a revision changes.
+`~/.local/bin/ocpp-simulator` points through `current`. Ensure
+`~/.local/bin` is on `PATH` if you want to invoke it without a full path.
 
-It intentionally **does not start a systemd service** or connect to a
-production CSMS automatically. The simulator is an interactive test client;
-use `ocpp-simulator run --cp ... --url ...` to start a deliberate test.
+Deployments are serialized with an operator-owned
+`~/.local/state/ocpp-simulator/deploy.lock` lock, consistent with
+`ocpp-csms` and `gway-remote`. Re-running the same Git revision
+verifies and reuses its installed release, without modifying that release or
+switching the active symlink. A corrupt/incomplete release fails closed;
+the installer does not silently overwrite an immutable release. Previous
+short-SHA installations are left intact during migration.
+
+It intentionally **does not start a systemd service**, create simulations,
+or connect to production charging stations. The simulator is an interactive
+test client; use `ocpp-simulator run --cp ... --url ...` to start a
+deliberate test. No active OCPP-CSMS service is touched.
 
 The installation is owned by the current non-root account and is separate
-from any `ocpp-csms` service or virtual environment. Re-running the
-installer upgrades the installed simulator from the checkout. Ansible can
-be invoked directly with
+from any `ocpp-csms` service or virtual environment. For remote deployment,
+`gway-remote` may invoke this canonical `deploy.sh` on a pinned checkout;
+no simulator-specific privileged setup is necessary. Ansible can
+also be invoked directly with
 `ANSIBLE_ROLES_PATH=ansible/roles ansible-playbook ansible/playbooks/install.yml -i localhost, -c local`.
+Direct Ansible invocation does **not** take the shell wrapper's deployment lock.
 
 ## Connect to a CSMS
 
