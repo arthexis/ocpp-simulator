@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -26,7 +27,10 @@ func run(args []string) error {
 	basicUser := flags.String("basic-user", "", "HTTP Basic username (defaults to --cp)")
 	basicPassword := flags.String("basic-password", "", "HTTP Basic password (WSS only; visible in process arguments)")
 	timeout := flags.Float64("connect-timeout", 10, "WebSocket handshake timeout in seconds")
-	if err := flags.Parse(args); err != nil { return err }
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) { return nil }
+		return err
+	}
 	if flags.NArg() != 0 { return fmt.Errorf("unexpected positional arguments: %v", flags.Args()) }
 	if *timeout <= 0 || *timeout > 120 { return fmt.Errorf("--connect-timeout must be positive and <=120s") }
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
