@@ -18,7 +18,7 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o /tmp/ocpp-simulator-go ./cmd/o
 ```
 
 G0 pins `github.com/lorenzodonini/ocpp-go v0.19.0` (tag marked
-pre-release by its authors). The independent loopback test uses
+pre-release by its authors; upstream license: MIT). The independent loopback test uses
 Gorilla WebSocket only for a tiny local CSMS wire fixture; the simulator
 itself uses the `ocpp-go` API. Dependency checks, security review and
 extended API compatibility remain explicit gates before G1.
