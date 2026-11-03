@@ -29,9 +29,9 @@ ocpp-simulator run --cp SIM001 --url ws://127.0.0.1:9000/SIM001
 ocpp-simulator-py run --cp SIM001 --url ws://127.0.0.1:9000/SIM001
 ```
 
-The Go backend currently supports --cp, --url, --vendor, --model, --ca,
+The Go backend supports --cp, --url, --vendor, --model, --ca,
 --basic-user, --basic-password and --connect-timeout. Unsupported Python
-scenario options fail explicitly; transaction and remote modes are G2/G3.
+remote/battery options fail explicitly; remote mode is G3.
 The Go process stays connected and sends Heartbeats at the interval issued
 by an Accepted BootNotification, until SIGINT/SIGTERM or disconnection.
 It does not auto-reconnect or start on installation.
@@ -60,3 +60,20 @@ rejection, custom CA trust, Basic Auth success/failure, and invalid option
 rejection. Deployment never starts a simulated charger, and no production
 CSMS connection has been made. Full real-CSMS acceptance follows in G1
 field validation; negative OCPP semantic tests follow in G4.
+
+## G2 one-shot charging
+
+```sh
+ocpp-simulator --backend go run --cp SIM001 --url ws://127.0.0.1:9000/SIM001 \\
+  --connector 1 --rfid TEST001 --power 7.2 --duration 60 --meter-interval 5
+```
+
+After Accepted BootNotification, the Go backend sends Preparing, Authorize,
+StartTransaction, Charging, periodic cumulative MeterValues (Wh),
+StopTransaction and Available. It requires accepted authorization and start
+responses, uses the server's transaction ID, and computes deterministic
+meter readings from configured simulated duration. SIGINT/SIGTERM requests
+an early StopTransaction. Failed MeterValues/StopTransaction never become
+invented successful closes. No remote commands, multiple sessions, battery
+SoC, or automatic reconnect yet. Unit and wire fixture tests are isolated
+from production endpoints.
