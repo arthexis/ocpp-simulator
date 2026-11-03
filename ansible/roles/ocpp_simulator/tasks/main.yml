@@ -70,24 +70,22 @@
     - ocpp_simulator_existing.stat.exists | default(false)
     - ocpp_simulator_release_probe.rc | default(1) == 0
 
-- name: Inspect optional Go executable in immutable release
+- name: Inspect Go executable in immutable release
   ansible.builtin.stat:
     path: "{{ ocpp_simulator_release }}/bin/ocpp-simulator-go"
   register: ocpp_simulator_existing_go
   when:
-    - ocpp_simulator_with_go | bool
     - ocpp_simulator_existing.stat.exists | default(false)
 
-- name: Reject existing release that lacks the requested Go executable
+- name: Reject existing release lacking Go executable
   ansible.builtin.assert:
     that:
       - ocpp_simulator_existing_go.stat.isreg | default(false)
       - ocpp_simulator_existing_go.stat.executable | default(false)
     fail_msg: >-
       Existing immutable release lacks the Go backend; refusing in-place
-      modification. Install --with-go from a new revision.
+      modification. Use a new revision containing both backends.
   when:
-    - ocpp_simulator_with_go | bool
     - ocpp_simulator_existing.stat.exists | default(false)
 
 - name: Reject incomplete immutable release without modifying it
@@ -123,7 +121,6 @@
     remote_src: true
     mode: preserve
   when:
-    - ocpp_simulator_with_go | bool
     - not (ocpp_simulator_existing.stat.exists | default(false))
 
 - name: Resolve Go module checksums in staged source
@@ -133,7 +130,6 @@
   environment:
     GOTOOLCHAIN: local
   when:
-    - ocpp_simulator_with_go | bool
     - not (ocpp_simulator_existing.stat.exists | default(false))
 
 - name: Build pinned Go backend into candidate release
@@ -148,15 +144,13 @@
   environment:
     GOTOOLCHAIN: local
   when:
-    - ocpp_simulator_with_go | bool
     - not (ocpp_simulator_existing.stat.exists | default(false))
 
-- name: Verify candidate Go backend
+- name: Verify Go backend
   ansible.builtin.command:
     argv: ["{{ ocpp_simulator_release }}/bin/ocpp-simulator-go", --help]
   register: ocpp_simulator_go_probe
   changed_when: false
-  when: ocpp_simulator_with_go | bool
 
 - name: Record release provenance
   ansible.builtin.copy:
@@ -236,13 +230,12 @@
     state: link
     force: true
 
-- name: Expose optional Go backend CLI in user bin directory
+- name: Expose Go backend CLI in user bin directory
   ansible.builtin.file:
     src: "{{ ocpp_simulator_current }}/bin/ocpp-simulator-go"
     dest: "{{ ocpp_simulator_bin_dir }}/ocpp-simulator-go"
     state: link
     force: true
-  when: ocpp_simulator_with_go | bool
 
 - name: Expose explicit Python backend CLI
   ansible.builtin.file:
@@ -261,8 +254,7 @@
     argv: ["{{ ocpp_simulator_bin_dir }}/ocpp-simulator-py", --help]
   changed_when: false
 
-- name: Verify Go backend dispatch when requested
+- name: Verify Go backend dispatch
   ansible.builtin.command:
     argv: ["{{ ocpp_simulator_bin_dir }}/ocpp-simulator", --backend, go, --help]
   changed_when: false
-  when: ocpp_simulator_with_go | bool
