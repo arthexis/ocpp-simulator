@@ -116,6 +116,26 @@
       - "{{ ocpp_simulator_source }}"
   when: not (ocpp_simulator_existing.stat.exists | default(false))
 
+- name: Stage Go sources without modifying the Git checkout
+  ansible.builtin.copy:
+    src: "{{ ocpp_simulator_source }}/go/"
+    dest: "{{ ocpp_simulator_release }}/go-source/"
+    remote_src: true
+    mode: preserve
+  when:
+    - ocpp_simulator_with_go | bool
+    - not (ocpp_simulator_existing.stat.exists | default(false))
+
+- name: Resolve Go module checksums in staged source
+  ansible.builtin.command:
+    argv: [go, mod, tidy]
+    chdir: "{{ ocpp_simulator_release }}/go-source"
+  environment:
+    GOTOOLCHAIN: local
+  when:
+    - ocpp_simulator_with_go | bool
+    - not (ocpp_simulator_existing.stat.exists | default(false))
+
 - name: Build pinned Go backend into candidate release
   ansible.builtin.command:
     argv:
@@ -124,7 +144,7 @@
       - -o
       - "{{ ocpp_simulator_release }}/bin/ocpp-simulator-go"
       - ./cmd/ocpp-simulator-go
-    chdir: "{{ ocpp_simulator_source }}/go"
+    chdir: "{{ ocpp_simulator_release }}/go-source"
   environment:
     GOTOOLCHAIN: local
   when:
