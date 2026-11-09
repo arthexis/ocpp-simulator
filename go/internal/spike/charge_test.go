@@ -15,6 +15,7 @@ import (
 type fakeChargePoint struct {
 	actions []string
 	meter []int
+    snapshots [][]types.SampledValue
 	auth types.AuthorizationStatus
 	start types.AuthorizationStatus
 	failMeter bool
@@ -43,6 +44,7 @@ func (f *fakeChargePoint) MeterValues(_ int, values []types.MeterValue,props ...
 	var n int
 	if _,err:=fmt.Sscan(values[0].SampledValue[0].Value,&n);err!=nil{return nil,err}
 	f.meter=append(f.meter,n)
+    f.snapshots=append(f.snapshots,values[0].SampledValue)
 	return &core.MeterValuesConfirmation{},nil
 }
 func (f *fakeChargePoint) StopTransaction(meter int,_ *types.DateTime,txID int,_ ...func(*core.StopTransactionRequest)) (*core.StopTransactionConfirmation,error) {
@@ -110,4 +112,35 @@ func TestChargeRejectsBadOptions(t *testing.T) {
 	} {
 		if err:=invalid.Validate();err==nil {t.Fatalf("accepted %+v",invalid)}
 	}
+}
+
+func TestBatterySessionRelativeMeterAndFullStop(t *testing.T) {
+ cp:=&fakeChargePoint{auth:types.AuthorizationStatusAccepted,start:types.AuthorizationStatusAccepted}
+ battery,err:=NewBattery(0.001,95)
+ if err!=nil {t.Fatal(err)}
+ battery.SetSeed(17)
+ o:=sampleCharge()
+ o.Battery=&battery
+ o.Seeded=true
+ o.Duration=100*time.Millisecond
+ o.MeterInterval=10*time.Millisecond
+ wh,err:=Charge(context.Background(),cp,o)
+ if err!=nil {t.Fatal(err)}
+ if wh<=0 || wh>1 || !battery.Full() || battery.SOC()!=100 {t.Fatalf("battery meter=%d state=%+v",wh,battery)}
+ if len(cp.snapshots)==0 {t.Fatal("no MeterValues")}
+ first:=cp.snapshots[0]
+ if len(first)!=3 {t.Fatalf("expected Wh, W, SoC; got %+v",first)}
+ if first[0].Measurand!=types.MeasurandEnergyActiveImportRegister || first[0].Unit!=types.UnitOfMeasureWh ||
+ first[1].Measurand!=types.MeasurandPowerActiveImport || first[1].Unit!=types.UnitOfMeasureW ||
+ first[2].Measurand!=types.MeasurandSoC || first[2].Unit!=types.UnitOfMeasurePercent {
+  t.Fatalf("invalid measurands: %+v",first)
+ }
+ if !strings.Contains(strings.Join(cp.actions,","),"StopTransaction:42:") {t.Fatalf("missing natural stop: %v",cp.actions)}
+}
+func TestBatteryRejectsCorruptSessionState(t *testing.T) {
+ o:=sampleCharge()
+ battery,_:=NewBattery(1,30)
+ battery.EnergyWh=-1
+ o.Battery=&battery
+ if err:=o.Validate();err==nil {t.Fatal("accepted corrupt battery")}
 }
