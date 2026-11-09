@@ -29,3 +29,14 @@ func TestRemoteConfigurationValidation(t *testing.T) {
  r,err=h.OnChangeConfiguration(&core.ChangeConfigurationRequest{Key:"AuthorizeRemoteTxRequests",Value:"false"})
  if err!=nil||r.Status!=core.ConfigurationStatusNotSupported {t.Fatal(r,err)}
 }
+
+func TestHeartbeatConfigurationNotifiesServingLoop(t *testing.T) {
+ updates:=make(chan int,1)
+ h:=&RemoteHandler{heartbeatUpdates:updates}
+ for _,n:=range []string{"15","30","45"} {
+  r,err:=h.OnChangeConfiguration(&core.ChangeConfigurationRequest{Key:"HeartbeatInterval",Value:n})
+  if err!=nil||r.Status!=core.ConfigurationStatusAccepted {t.Fatal(r,err)}
+ }
+ select {case n:=<-updates:if n!=45 {t.Fatalf("stale heartbeat update %d",n)}
+ default:t.Fatal("no heartbeat update")}
+}
