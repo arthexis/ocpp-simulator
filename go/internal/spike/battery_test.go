@@ -12,6 +12,8 @@ func TestBatteryCapacityAndTaper(t *testing.T) {
  if b.SOC() != 30 || b.PowerKW(7.2) != 7.2 { t.Fatalf("initial battery: %+v", b) }
  b.EnergyWh = b.CapacityWh * 0.9
  if math.Abs(b.PowerKW(7.2)-3.6) > 1e-9 { t.Fatalf("90%% taper: %g", b.PowerKW(7.2)) }
+ b.EnergyWh = b.CapacityWh * 0.999
+ if math.Abs(b.PowerKW(7.2)-0.576) > 1e-9 { t.Fatalf("taper floor: %g", b.PowerKW(7.2)) }
  b.EnergyWh = b.CapacityWh
  if !b.Full() || b.PowerKW(7.2) != 0 { t.Fatal("full battery must not charge") }
 }
