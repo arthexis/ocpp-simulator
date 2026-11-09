@@ -96,10 +96,14 @@ func Serve(ctx context.Context, o ServeOptions) error {
 		client.SetBasicAuth(user, o.BasicPassword)
 	}
 	cp := ocpp16.NewChargePoint(o.CP, nil, client)
+ var heartbeatUpdates chan int
+ var remoteHandler *RemoteHandler
  if o.Remote {
   ledger,err:=NewConnectorLedger(o.Connectors)
   if err!=nil{return err}
-  cp.SetCoreHandler(&RemoteHandler{Ledger:ledger})
+  heartbeatUpdates=make(chan int,1)
+  remoteHandler=&RemoteHandler{Ledger:ledger,heartbeatUpdates:heartbeatUpdates}
+  cp.SetCoreHandler(remoteHandler)
  }
 	// ocpp-go's API accepts a base URL and appends /<chargePointID>.
 	if err := cp.Start(strings.TrimSuffix(o.URL, "/"+o.CP)); err != nil {
@@ -130,7 +134,8 @@ func Serve(ctx context.Context, o ServeOptions) error {
 		interval = result.interval
 	}
 	fmt.Printf("BootNotification: Accepted (heartbeat %ds)\n", interval)
-	ticker := time.NewTicker(time.Duration(interval)*time.Second)
+	if remoteHandler!=nil {remoteHandler.mu.Lock();remoteHandler.heartbeat=interval;remoteHandler.mu.Unlock()}
+ ticker := time.NewTicker(time.Duration(interval)*time.Second)
 	defer ticker.Stop()
 	var chargingDone <-chan error
 	if o.Charge != nil {
@@ -151,7 +156,9 @@ func Serve(ctx context.Context, o ServeOptions) error {
 			return nil
 		case err := <-client.Disconnected(): return fmt.Errorf("CSMS disconnected: %w", err)
 		case err := <-chargingDone: return err
-		case <-ticker.C:
+		case updated:=<-heartbeatUpdates:
+            ticker.Reset(time.Duration(updated)*time.Second)
+        case <-ticker.C:
 			type response struct{ err error }
 			reply := make(chan response, 1)
 			go func() {
