@@ -34,12 +34,12 @@ func (b Battery) SOC() float64 {
 func (b Battery) Full() bool { return b.EnergyWh >= b.CapacityWh }
 
 // PowerKW returns the available power at the current state of charge.
-// It tapers linearly after 80% and reaches zero at 100%.
+// It tapers after 80% with the Python model's 8% floor until full.
 func (b Battery) PowerKW(maxKW float64) float64 {
  if maxKW <= 0 || math.IsNaN(maxKW) || math.IsInf(maxKW, 0) || b.Full() { return 0 }
  soc := b.SOC()
  if soc <= 80 { return maxKW }
- return maxKW * (100-soc)/20
+ return maxKW * math.Max(0.08, (100-soc)/20)
 }
 
 // Advance integrates charging over a bounded time step, never exceeding capacity.
