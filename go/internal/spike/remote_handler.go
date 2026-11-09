@@ -14,6 +14,7 @@ type RemoteHandler struct {
  Ledger *ConnectorLedger
  mu sync.Mutex
  heartbeat int
+ heartbeatUpdates chan int
 }
 var _ core.ChargePointHandler = (*RemoteHandler)(nil)
 func (h *RemoteHandler) OnRemoteStartTransaction(_ *core.RemoteStartTransactionRequest)(*core.RemoteStartTransactionConfirmation,error){
@@ -59,6 +60,7 @@ func (h *RemoteHandler) OnChangeConfiguration(r *core.ChangeConfigurationRequest
  if r.Key!="HeartbeatInterval" {return core.NewChangeConfigurationConfirmation(core.ConfigurationStatusNotSupported),nil}
  n,err:=strconv.Atoi(r.Value)
  if err!=nil || n<1 || n>86400 {return core.NewChangeConfigurationConfirmation(core.ConfigurationStatusRejected),nil}
- h.mu.Lock();h.heartbeat=n;h.mu.Unlock()
+ h.mu.Lock();h.heartbeat=n;updates:=h.heartbeatUpdates;h.mu.Unlock()
+ if updates!=nil {select {case updates<-n:default:select {case <-updates:default:};select {case updates<-n:default:}}}
  return core.NewChangeConfigurationConfirmation(core.ConfigurationStatusAccepted),nil
 }
