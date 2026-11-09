@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+    "math"
 	"os"
 	"os/signal"
 	"syscall"
@@ -32,6 +33,9 @@ func run(args []string) error {
 	power := flags.Float64("power", 7.2, "charging power ceiling in kW")
 	duration := flags.Float64("duration", 60, "one-shot charging duration in seconds")
 	meterInterval := flags.Float64("meter-interval", 1, "meter sample interval in seconds")
+    batteryKWh := flags.Float64("battery-kwh", 0, "enable finite battery model with this capacity in kWh")
+    soc := flags.Float64("soc", 30, "initial battery state of charge in percent")
+    seed := flags.Uint64("seed", 1, "deterministic battery variation seed")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) { return nil }
 		return err
@@ -41,10 +45,19 @@ func run(args []string) error {
 	if *connector < 0 || *duration < 0 || *meterInterval <= 0 || *duration > 86400 || *meterInterval > 86400 {
 		return fmt.Errorf("invalid charging duration or interval")
 	}
-	var charge *spike.ChargeOptions
+	if math.IsNaN(*batteryKWh) || math.IsInf(*batteryKWh,0) || *batteryKWh < 0 { return fmt.Errorf("invalid --battery-kwh") }
+    if *batteryKWh > 0 && *connector == 0 { return fmt.Errorf("--battery-kwh requires --connector") }
+    var charge *spike.ChargeOptions
 	if *connector > 0 {
 		charge = &spike.ChargeOptions{Connector:*connector, RFID:*rfid, PowerKW:*power,
 			Duration:time.Duration(*duration*float64(time.Second)), MeterInterval:time.Duration(*meterInterval*float64(time.Second))}
+        if *batteryKWh > 0 {
+            battery,err:=spike.NewBattery(*batteryKWh,*soc)
+            if err!=nil {return err}
+            battery.SetSeed(*seed)
+            charge.Battery=&battery
+            charge.Seeded=true
+        }
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
