@@ -21,6 +21,8 @@ type ServeOptions struct {
 	CA, BasicUser, BasicPassword string
 	ConnectTimeout time.Duration
 	Charge *ChargeOptions
+ Remote bool
+ Connectors int
 }
 
 var cpName = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
@@ -51,6 +53,8 @@ func ValidateServe(o ServeOptions) error {
 		return fmt.Errorf("--connect-timeout must be between 0 and 120 seconds")
 	}
 	if o.Charge != nil { if err := o.Charge.Validate(); err != nil { return err } }
+ if o.Remote { if _,err:=NewConnectorLedger(o.Connectors);err!=nil {return err} } else if o.Connectors!=0 {return fmt.Errorf("--connectors requires --remote")}
+ if o.Charge!=nil && o.Remote {return fmt.Errorf("one-shot --connector and --remote are mutually exclusive")}
 	return nil
 }
 
@@ -92,6 +96,11 @@ func Serve(ctx context.Context, o ServeOptions) error {
 		client.SetBasicAuth(user, o.BasicPassword)
 	}
 	cp := ocpp16.NewChargePoint(o.CP, nil, client)
+ if o.Remote {
+  ledger,err:=NewConnectorLedger(o.Connectors)
+  if err!=nil{return err}
+  cp.SetCoreHandler(&RemoteHandler{Ledger:ledger})
+ }
 	// ocpp-go's API accepts a base URL and appends /<chargePointID>.
 	if err := cp.Start(strings.TrimSuffix(o.URL, "/"+o.CP)); err != nil {
 		return fmt.Errorf("connect: %w", err)
