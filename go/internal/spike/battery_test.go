@@ -54,3 +54,47 @@ func TestBatteryDeterministicReplay(t *testing.T) {
  }
  if a.SOC() <= 79 { t.Fatal("battery did not advance") }
 }
+
+func TestSeededBatteryRepeatabilityAndBounds(t *testing.T) {
+ a,_:=NewBattery(60,35)
+ b,_:=NewBattery(60,35)
+ other,_:=NewBattery(60,35)
+ a.SetSeed(7); b.SetSeed(7); other.SetSeed(8)
+ different:=false
+ for i:=0;i<100;i++ {
+  x,err:=a.AdvanceSeeded(7.2,time.Second)
+  if err!=nil {t.Fatal(err)}
+  y,err:=b.AdvanceSeeded(7.2,time.Second)
+  if err!=nil || x!=y || a.EnergyWh!=b.EnergyWh {t.Fatalf("seeded replay diverged at %d",i)}
+  z,err:=other.AdvanceSeeded(7.2,time.Second)
+  if err!=nil {t.Fatal(err)}
+  if z!=x {different=true}
+  if a.drift < -0.06 || a.drift > 0.06 {t.Fatalf("drift out of bounds: %g",a.drift)}
+ }
+ if !different {t.Fatal("different seeds produced identical trace")}
+}
+
+func TestMeterRoundingAndInvalidDelta(t *testing.T) {
+ b,_:=NewBattery(60,30)
+ initial:=b.EnergyWh
+ for _,tc:=range []struct{ delta float64; want int }{{0.5,0},{1.5,2},{2.5,2},{3.5,4}} {
+  b.EnergyWh=initial+tc.delta
+  got,err:=b.MeterWh(initial)
+  if err!=nil || got!=tc.want {t.Fatalf("delta %g: %d %v",tc.delta,got,err)}
+ }
+ for _,v:=range []float64{initial+10,math.NaN(),math.Inf(1)} {
+  if _,err:=b.MeterWh(v);err==nil {t.Fatalf("accepted invalid initial meter %g",v)}
+ }
+}
+
+func TestSeededFullAndInvalidSteps(t *testing.T) {
+ b,_:=NewBattery(0.001,95)
+ b.SetSeed(2)
+ delivered,err:=b.AdvanceSeeded(7.2,time.Hour)
+ if err!=nil || delivered<=0 || !b.Full() || b.SOC()!=100 {t.Fatalf("full: %g %v %+v",delivered,err,b)}
+ if more,err:=b.AdvanceSeeded(7.2,time.Second);err!=nil || more!=0 {t.Fatalf("charged full battery: %g %v",more,err)}
+ if _,err:=b.AdvanceSeeded(7.2,-time.Second);err==nil {t.Fatal("accepted negative step")}
+ for _,power:=range []float64{0,-1,math.NaN(),math.Inf(1)} {
+  if _,err:=b.AdvanceSeeded(power,time.Second);err==nil {t.Fatalf("accepted invalid power %g",power)}
+ }
+}
