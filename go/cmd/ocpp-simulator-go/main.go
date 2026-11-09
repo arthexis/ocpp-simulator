@@ -29,6 +29,8 @@ func run(args []string) error {
 	basicPassword := flags.String("basic-password", "", "HTTP Basic password (WSS only; visible in process arguments)")
 	timeout := flags.Float64("connect-timeout", 10, "WebSocket handshake timeout in seconds")
 	connector := flags.Int("connector", 0, "run a single charging transaction then exit")
+ remote := flags.Bool("remote", false, "enable conservative remote OCPP Core responses (starts/stops rejected until lifecycle dispatch exists)")
+ connectors := flags.Int("connectors", 0, "number of connectors in remote mode (1-128)")
 	rfid := flags.String("rfid", "TEST001", "authorization identifier")
 	power := flags.Float64("power", 7.2, "charging power ceiling in kW")
 	duration := flags.Float64("duration", 60, "one-shot charging duration in seconds")
@@ -65,6 +67,7 @@ func run(args []string) error {
 		Options: spike.Options{CP:*cp, URL:*address, Vendor:*vendor, Model:*model},
 		CA:*ca, BasicUser:*basicUser, BasicPassword:*basicPassword,
 		ConnectTimeout:time.Duration(*timeout*float64(time.Second)), Charge:charge,
+  Remote:*remote, Connectors:*connectors,
 	})
 }
 
