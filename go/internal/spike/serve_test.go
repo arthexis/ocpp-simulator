@@ -129,3 +129,18 @@ func TestG1RejectsInvalidCA(t *testing.T) {
 	o:=ServeOptions{Options:Options{CP:"SIM001",URL:"wss://localhost/SIM001",Vendor:"Arthexis",Model:"Simulator"},CA:p,ConnectTimeout:time.Second}
 	if err:=Serve(context.Background(),o);err==nil {t.Fatal("accepted invalid CA bundle")}
 }
+
+func TestRemoteModeValidation(t *testing.T) {
+ base:=ServeOptions{Options:Options{CP:"SIM001",URL:"wss://example.test/SIM001",Vendor:"Arthexis",Model:"Simulator"},ConnectTimeout:time.Second}
+ for _,mutate:=range []func(*ServeOptions){
+  func(o *ServeOptions){o.Remote=true;o.Connectors=0},
+  func(o *ServeOptions){o.Remote=true;o.Connectors=129},
+  func(o *ServeOptions){o.Remote=false;o.Connectors=1},
+  func(o *ServeOptions){o.Remote=true;o.Connectors=1;o.Charge=&ChargeOptions{Connector:1,RFID:"TEST",PowerKW:7.2,Duration:time.Second,MeterInterval:time.Second}},
+ } {
+  o:=base;mutate(&o)
+  if err:=ValidateServe(o);err==nil {t.Fatalf("accepted unsafe remote options: %+v",o)}
+ }
+ base.Remote=true;base.Connectors=2
+ if err:=ValidateServe(base);err!=nil {t.Fatal(err)}
+}
