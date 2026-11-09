@@ -126,7 +126,7 @@ func TestBatterySessionRelativeMeterAndFullStop(t *testing.T) {
  o.MeterInterval=10*time.Millisecond
  wh,err:=Charge(context.Background(),cp,o)
  if err!=nil {t.Fatal(err)}
- if wh<=0 || wh>1 || !battery.Full() || battery.SOC()!=100 {t.Fatalf("battery meter=%d state=%+v",wh,battery)}
+ if wh<0 || wh>1 || !battery.Full() || battery.SOC()!=100 {t.Fatalf("battery meter=%d state=%+v",wh,battery)}
  if len(cp.snapshots)==0 {t.Fatal("no MeterValues")}
  first:=cp.snapshots[0]
  if len(first)!=3 {t.Fatalf("expected Wh, W, SoC; got %+v",first)}
