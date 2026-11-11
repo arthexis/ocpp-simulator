@@ -26,10 +26,11 @@ type resetWireEvidence struct {
 // This test uses an ephemeral, in-process OCPP-J fixture. No production CSMS,
 // charger, Ansible run, hardware reset or external network is involved.
 func TestR5OCPPJSoftHardResetAndDisconnect(t *testing.T) {
-	for _,mode:=range []string{"Soft","Hard","Disconnect"}{
+	for _,mode:=range []string{"Soft","Hard","Disconnect","Cancel"}{
 		t.Run(mode,func(t *testing.T){
 			done:=make(chan resetWireEvidence,1)
 			failure:=make(chan error,1)
+			cancelSignal:=make(chan struct{},1)
 			release:=make(chan struct{})
 			report:=func(err error){select{case failure<-err:default:}}
 			server:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
@@ -103,7 +104,7 @@ func TestR5OCPPJSoftHardResetAndDisconnect(t *testing.T) {
 							evidence.stopTx=p.ID
 							evidence.stopReason=p.Reason
 							evidence.stopCount++
-							if mode!="Soft" {report(fmt.Errorf("StopTransaction must not be sent after %s",mode));return}
+							if mode!="Soft"&&mode!="Cancel" {report(fmt.Errorf("StopTransaction must not be sent after %s",mode));return}
 						default:
 							report(fmt.Errorf("unexpected charge-point action %s",action));return
 						}
@@ -121,6 +122,10 @@ func TestR5OCPPJSoftHardResetAndDisconnect(t *testing.T) {
 								done<-evidence
 								<-release
 								return
+							}
+							if mode=="Cancel" {
+								select {case cancelSignal<-struct{}{}:default:}
+								continue
 							}
 							if !send([]any{2,"r5-reset","Reset",map[string]any{"type":mode}}){return}
 						}
@@ -141,7 +146,8 @@ func TestR5OCPPJSoftHardResetAndDisconnect(t *testing.T) {
 					default:
 						report(fmt.Errorf("unexpected type %d",typ));return
 					}
-					if mode=="Soft"&&evidence.resetAccepted&&evidence.startAccepted&&
+					if (mode=="Soft"||mode=="Cancel")&&
+						(mode=="Cancel"||evidence.resetAccepted)&&evidence.startAccepted&&
 						evidence.stopCount==1&&evidence.availableAfter {
 						done<-evidence
 						<-release
@@ -152,6 +158,12 @@ func TestR5OCPPJSoftHardResetAndDisconnect(t *testing.T) {
 			defer func(){close(release);server.Close()}()
 			ctx,cancel:=context.WithTimeout(context.Background(),6*time.Second)
 			defer cancel()
+			go func(){
+				select {
+				case <-cancelSignal: cancel()
+				case <-ctx.Done():
+				}
+			}()
 			serveDone:=make(chan error,1)
 			go func(){
 				serveDone<-Serve(ctx,ServeOptions{
@@ -188,19 +200,27 @@ func TestR5OCPPJSoftHardResetAndDisconnect(t *testing.T) {
 				if !got.resetAccepted||got.stopCount!=0||got.availableAfter{
 					t.Fatalf("Hard emitted a fictional stop: %+v",got)
 				}
+			}else if mode=="Cancel" {
+				if got.stopCount!=1||got.stopReason!="Local"||!got.availableAfter {
+					t.Fatalf("context cancellation failed graceful close: %+v",got)
+				}
 			}else if got.stopCount!=0||got.availableAfter{
 				t.Fatalf("disconnect fabricated a stop: %+v",got)
 			}
 			select{
 			case err:=<-serveDone:
-				if err==nil{
-					t.Fatalf("%s termination must be explicit and require reconciliation",mode)
-				}
-				if mode!="Disconnect"&&!strings.Contains(err.Error(),"reset"){
-					t.Fatalf("missing reset termination reason: %v",err)
-				}
-				if mode=="Disconnect"&&!strings.Contains(err.Error(),"disconnected"){
-					t.Fatalf("missing disconnect reason: %v",err)
+				if mode=="Cancel" {
+					if err!=nil {t.Fatalf("confirmed signal shutdown must be clean: %v",err)}
+				}else{
+					if err==nil {
+						t.Fatalf("%s termination must be explicit and require reconciliation",mode)
+					}
+					if mode!="Disconnect"&&!strings.Contains(err.Error(),"reset"){
+						t.Fatalf("missing reset termination reason: %v",err)
+					}
+					if mode=="Disconnect"&&!strings.Contains(err.Error(),"disconnected"){
+						t.Fatalf("missing disconnect reason: %v",err)
+					}
 				}
 			case <-time.After(4*time.Second):t.Fatal("Serve did not terminate in bounded time")
 			}

@@ -20,7 +20,6 @@ type remoteWireSummary struct {
 	stopReject bool
 	stopAccepted bool
 	stopDuplicate bool
-	resetReject bool
 	authorized bool
 	started    bool
 	stopped    bool
@@ -257,15 +256,6 @@ func TestR3RemoteStartStopOCPPJLoopback(t *testing.T) {
 						return
 					}
 					summary.stopReject = true
-					if !sendCall("reset-not-yet", "Reset", map[string]any{"type":"Soft"}) {
-						return
-					}
-				case "reset-not-yet":
-					if payload.Status != "Rejected" {
-						report(fmt.Errorf("R5 reset unexpectedly enabled: %s", payload.Status))
-						return
-					}
-					summary.resetReject = true
 				default:
 					report(fmt.Errorf("unexpected remote command response %s", id))
 					return
@@ -278,7 +268,7 @@ func TestR3RemoteStartStopOCPPJLoopback(t *testing.T) {
 				return
 			}
 			if summary.accepted && summary.duplicate && summary.stopReject && summary.stopAccepted &&
-				summary.stopDuplicate && summary.resetReject &&
+				summary.stopDuplicate &&
 				summary.authorized && summary.started && summary.stopped && summary.available {
 				finished <- summary
 				<-finishHold
