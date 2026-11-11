@@ -198,7 +198,7 @@ func TestRemoteStartDispatcherConcurrentSameConnector(t *testing.T) {
 	cp := remoteAcceptedFake()
 	cp.authGate = gate
 	m, _ := NewSessionManager(context.Background(), 1)
-	d, err := NewRemoteStartDispatcher(m, cp, RemoteChargeSettings{Duration: 100 * time.Millisecond})
+	d, err := NewRemoteStartDispatcher(m, cp, RemoteChargeSettings{Duration: 100 * time.Millisecond, MeterInterval: 20 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
