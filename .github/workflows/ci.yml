@@ -136,6 +136,35 @@ jobs:
         run: go test -race -count=1 ./...
       - name: Build Linux arm64
         run: GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o /tmp/ocpp-simulator-go ./cmd/ocpp-simulator-go
+      - name: Verify pinned ocpp-go v0.19.0 and sumdb (LAB-5)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(go env GOSUMDB)" != off
+          go mod download -json github.com/lorenzodonini/ocpp-go@v0.19.0 | jq -e \
+            '.Path == "github.com/lorenzodonini/ocpp-go" and .Version == "v0.19.0" and .Sum == "h1:THNriVV3bUWkGzaIkDeytcgoeBRjoN9ezPHsddIDfgc=" and (.Error == null)'
+          go mod verify
+      - name: R6C-3B2 offline UID negative tests (LAB-5)
+        run: go test -race -count=3 ./internal/spike -run '^TestR6C3B2LAB5'
+      - name: Cross-compile offline ARM64 UID test executable (LAB-5)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/r6c3b2-lab5
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go test -c -trimpath -o /tmp/r6c3b2-lab5/uidlab-linux-arm64.test ./internal/spike
+          file /tmp/r6c3b2-lab5/uidlab-linux-arm64.test | grep -F 'ELF 64-bit'
+          readelf -h /tmp/r6c3b2-lab5/uidlab-linux-arm64.test | grep -F 'AArch64'
+          go version -m /tmp/r6c3b2-lab5/uidlab-linux-arm64.test > /tmp/r6c3b2-lab5/provenance.txt
+          grep -Eq 'dep[[:space:]]+github.com/lorenzodonini/ocpp-go[[:space:]]+v0\.19\.0' /tmp/r6c3b2-lab5/provenance.txt
+          sha256sum /tmp/r6c3b2-lab5/uidlab-linux-arm64.test > /tmp/r6c3b2-lab5/SHA256SUMS
+          printf 'checkout=%s\n' "$(git rev-parse HEAD)" > /tmp/r6c3b2-lab5/source-identity.txt
+          printf 'event=%s\n' "$GITHUB_EVENT_NAME" >> /tmp/r6c3b2-lab5/source-identity.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r6c3b2-lab5-arm64-offline-test-elf
+          path: /tmp/r6c3b2-lab5/
+          if-no-files-found: error
+          retention-days: 7
 
   ci:
     name: CI
