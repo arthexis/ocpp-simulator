@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,15 +18,18 @@ type remoteWireSummary struct {
 	accepted   bool
 	duplicate  bool
 	stopReject bool
+	stopAccepted bool
+	stopDuplicate bool
 	resetReject bool
 	authorized bool
 	started    bool
 	stopped    bool
 	available  bool
 	meters     int
+	lastMeter  int
 }
 
-func TestR2RemoteStartOCPPJLoopback(t *testing.T) {
+func TestR3RemoteStartStopOCPPJLoopback(t *testing.T) {
 	// All traffic stays inside an httptest WebSocket server. This is not a
 	// connection to any external OCPP-CSMS or production charger.
 	finished := make(chan remoteWireSummary, 1)
@@ -52,6 +56,8 @@ func TestR2RemoteStartOCPPJLoopback(t *testing.T) {
 		defer ws.Close()
 		statuses := 0
 		startSent := false
+		stopSent := false
+		pendingStopID := ""
 		var summary remoteWireSummary
 		sendCall := func(id, action string, payload any) bool {
 			if err := ws.WriteJSON([]any{2, id, action, payload}); err != nil {
@@ -129,22 +135,51 @@ func TestR2RemoteStartOCPPJLoopback(t *testing.T) {
 					response = map[string]any{"idTagInfo": map[string]any{"status":"Accepted"}, "transactionId": 511}
 				case "MeterValues":
 					summary.meters++
-					var payload map[string]any
-					_ = json.Unmarshal(frame[3], &payload)
-					if int(payload["transactionId"].(float64)) != 511 {
-						report(fmt.Errorf("meter did not use CSMS transaction 511"))
+					var payload struct {
+						TransactionID int `json:"transactionId"`
+						MeterValue []struct {
+							SampledValue []struct {
+								Value string `json:"value"`
+							} `json:"sampledValue"`
+						} `json:"meterValue"`
+					}
+					if err := json.Unmarshal(frame[3], &payload); err != nil ||
+						payload.TransactionID != 511 || len(payload.MeterValue) == 0 ||
+						len(payload.MeterValue[0].SampledValue) == 0 {
+						report(fmt.Errorf("invalid meter for CSMS transaction 511: %s", frame[3]))
+						return
+					}
+					var meterErr error
+					summary.lastMeter, meterErr = strconv.Atoi(payload.MeterValue[0].SampledValue[0].Value)
+					if meterErr != nil {
+						report(meterErr)
 						return
 					}
 					response = map[string]any{}
 				case "StopTransaction":
+					if summary.stopped {
+						report(fmt.Errorf("duplicate StopTransaction on CSMS"))
+						return
+					}
 					summary.stopped = true
-					var payload map[string]any
-					_ = json.Unmarshal(frame[3], &payload)
-					if int(payload["transactionId"].(float64)) != 511 {
-						report(fmt.Errorf("stop did not use CSMS transaction 511"))
+					var payload struct {
+						TransactionID int `json:"transactionId"`
+						MeterStop     int `json:"meterStop"`
+						Reason        string `json:"reason"`
+					}
+					if err := json.Unmarshal(frame[3], &payload); err != nil ||
+						payload.TransactionID != 511 || payload.Reason != "Remote" ||
+						payload.MeterStop != summary.lastMeter {
+						report(fmt.Errorf("invalid Remote StopTransaction: %s (last meter %d)", frame[3], summary.lastMeter))
 						return
 					}
 					response = map[string]any{}
+					if !summary.stopDuplicate {
+						// Do not acknowledge StopTransaction until a duplicate
+						// RemoteStop was admitted; this proves one in-flight stop.
+						pendingStopID = id
+						continue
+					}
 				case "Heartbeat":
 					response = map[string]any{"currentTime":"2026-11-11T10:00:01Z"}
 				default:
@@ -154,6 +189,12 @@ func TestR2RemoteStartOCPPJLoopback(t *testing.T) {
 				if err := ws.WriteJSON([]any{3, id, response}); err != nil {
 					report(err)
 					return
+				}
+				if action == "MeterValues" && !stopSent {
+					stopSent = true
+					if !sendCall("stop-active", "RemoteStopTransaction", map[string]any{"transactionId":511}) {
+						return
+					}
 				}
 				if action == "Heartbeat" && statuses == 1 && !startSent {
 					// The first heartbeat proves Serve completed initial status
@@ -185,12 +226,34 @@ func TestR2RemoteStartOCPPJLoopback(t *testing.T) {
 						return
 					}
 					summary.duplicate = true
-					if !sendCall("stop-not-yet", "RemoteStopTransaction", map[string]any{"transactionId":511}) {
+					if !sendCall("stop-unknown", "RemoteStopTransaction", map[string]any{"transactionId":512}) {
 						return
 					}
-				case "stop-not-yet":
+				case "stop-active":
+					if payload.Status != "Accepted" {
+						report(fmt.Errorf("active transaction remote stop rejected: %s", payload.Status))
+						return
+					}
+					summary.stopAccepted = true
+					if !sendCall("stop-duplicate", "RemoteStopTransaction", map[string]any{"transactionId":511}) {
+						return
+					}
+				case "stop-duplicate":
+					if payload.Status != "Accepted" {
+						report(fmt.Errorf("in-flight duplicate RemoteStop not idempotent: %s", payload.Status))
+						return
+					}
+					summary.stopDuplicate = true
+					if pendingStopID != "" {
+						if err := ws.WriteJSON([]any{3, pendingStopID, map[string]any{}}); err != nil {
+							report(err)
+							return
+						}
+						pendingStopID = ""
+					}
+				case "stop-unknown":
 					if payload.Status != "Rejected" {
-						report(fmt.Errorf("R3 stop unexpectedly enabled: %s", payload.Status))
+						report(fmt.Errorf("unknown transaction ID unexpectedly accepted: %s", payload.Status))
 						return
 					}
 					summary.stopReject = true
@@ -214,7 +277,8 @@ func TestR2RemoteStartOCPPJLoopback(t *testing.T) {
 				report(fmt.Errorf("invalid OCPP message type %d", kind))
 				return
 			}
-			if summary.accepted && summary.duplicate && summary.stopReject && summary.resetReject &&
+			if summary.accepted && summary.duplicate && summary.stopReject && summary.stopAccepted &&
+				summary.stopDuplicate && summary.resetReject &&
 				summary.authorized && summary.started && summary.stopped && summary.available {
 				finished <- summary
 				<-finishHold
@@ -237,7 +301,7 @@ func TestR2RemoteStartOCPPJLoopback(t *testing.T) {
 			ConnectTimeout: time.Second,
 			Remote: true, Connectors: 1,
 			RemotePowerKW: 7.2,
-			RemoteDuration: 150*time.Millisecond,
+			RemoteDuration: 2*time.Second,
 			RemoteMeterInterval: 40*time.Millisecond,
 		})
 	}()

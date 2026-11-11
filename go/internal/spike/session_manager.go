@@ -28,6 +28,8 @@ type SessionSnapshot struct {
 type managedSession struct {
 	state         SessionState
 	transactionID int
+	remoteStop    bool
+	stopIssued    bool
 	ctx           context.Context
 	cancel        context.CancelFunc
 }
@@ -224,6 +226,56 @@ func (m *SessionManager) RequestStop(connector int) error {
 		return fmt.Errorf("connector %d has no active session", connector)
 	}
 	return nil
+}
+
+// RequestRemoteStop applies only to an active, CSMS-acknowledged transaction.
+// It holds the manager lock across ID lookup, state check, and cancellation,
+// preventing Finish or connector reuse from racing with RemoteStop.
+// Repeating the same request is idempotent while that transaction is retained.
+func (m *SessionManager) RequestRemoteStop(transactionID int) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if transactionID <= 0 || m.closed || m.parent.Err() != nil {
+		return 0, fmt.Errorf("invalid or unavailable remote transaction %d", transactionID)
+	}
+	connector, ok := m.ledger.ConnectorFor(transactionID)
+	if !ok || !m.validConnector(connector) {
+		return 0, fmt.Errorf("unknown remote transaction %d", transactionID)
+	}
+	slot := &m.slots[connector]
+	if slot.transactionID != transactionID {
+		return 0, fmt.Errorf("stale transaction %d", transactionID)
+	}
+	if slot.remoteStop && slot.state == SessionStopping {
+		return connector, nil
+	}
+	if slot.state != SessionCharging || slot.stopIssued {
+		return 0, fmt.Errorf("transaction %d no longer accepting remote stop", transactionID)
+	}
+	slot.remoteStop = true
+	slot.state = SessionStopping
+	slot.cancel()
+	return connector, nil
+}
+
+// BeginStop claims the single StopTransaction attempt and freezes its reason.
+// A new RemoteStop arriving after a Local stop was claimed must be rejected;
+// previously accepted RemoteStop retries can still be acknowledged idempotently.
+func (m *SessionManager) BeginStop(connector, transactionID int) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.validConnector(connector) || transactionID <= 0 {
+		return false, fmt.Errorf("invalid stop identity")
+	}
+	slot := &m.slots[connector]
+	if slot.transactionID != transactionID ||
+		(slot.state != SessionCharging && slot.state != SessionStopping) ||
+		slot.stopIssued {
+		return false, fmt.Errorf("transaction %d has no unclaimed stop", transactionID)
+	}
+	slot.state = SessionStopping
+	slot.stopIssued = true
+	return slot.remoteStop, nil
 }
 
 // Finish must be called only after confirmed transaction closure. It remains

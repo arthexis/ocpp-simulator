@@ -54,7 +54,7 @@ type remoteStartJob struct {
 
 // RemoteStartDispatcher owns a finite queue and at most one worker per connector.
 // OnRemoteStartTransaction only reserves/queues: it never calls OCPP synchronously.
-// RemoteStopTransaction and Reset remain rejected until R3/R5.
+// RemoteStopTransaction cancels a known session; Reset remains rejected until R5.
 type RemoteStartDispatcher struct {
 	mu        sync.Mutex
 	sessions  *SessionManager
@@ -148,6 +148,22 @@ func (d *RemoteStartDispatcher) TryStart(request *core.RemoteStartTransactionReq
 	}
 }
 
+// TryStop only admits a CSMS-assigned ID still owned by an active session.
+// Accepted acknowledges the cancellation request, NOT the StopTransaction
+// confirmation. The session worker remains the sole OCPP stop sender.
+func (d *RemoteStartDispatcher) TryStop(request *core.RemoteStopTransactionRequest) bool {
+	if request == nil || request.TransactionId <= 0 {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed || !d.ready || d.sessions.parent.Err() != nil {
+		return false
+	}
+	_, err := d.sessions.RequestRemoteStop(request.TransactionId)
+	return err == nil
+}
+
 func (d *RemoteStartDispatcher) report(err error) {
 	if err == nil {
 		return
@@ -216,9 +232,9 @@ func remoteAvailable(cp ChargePoint, connector int) error {
 	return err
 }
 
-// RunRemoteCharge runs only an admitted local session. RemoteStop remains
-// unsupported in R2, so the session has a strict finite duration. No fake
-// transaction IDs, StopTransaction acknowledgements or Available states.
+// RunRemoteCharge runs only an admitted local session. RemoteStop can
+// request cancellation for a recognized CSMS transaction; it cannot
+// fabricate StopTransaction acknowledgements or Available states.
 func RunRemoteCharge(ctx context.Context, cp ChargePoint, sessions *SessionManager, opts ChargeOptions) error {
 	if err := opts.Validate(); err != nil {
 		return err
@@ -268,7 +284,11 @@ func RunRemoteCharge(ctx context.Context, cp ChargePoint, sessions *SessionManag
 		_ = sessions.RequestStop(opts.Connector)
 		return fmt.Errorf("StartTransaction unconfirmed: %w", err)
 	}
-	if started == nil || started.IdTagInfo == nil || started.IdTagInfo.Status != types.AuthorizationStatusAccepted {
+	if started == nil {
+		_ = sessions.RequestStop(opts.Connector)
+		return fmt.Errorf("StartTransaction missing confirmation; connector %d remains reserved", opts.Connector)
+	}
+	if started.IdTagInfo == nil || started.IdTagInfo.Status != types.AuthorizationStatusAccepted {
 		_ = sessions.FailStart(opts.Connector)
 		statusErr := remoteAvailable(cp, opts.Connector)
 		if statusErr != nil {
@@ -315,11 +335,23 @@ func RunRemoteCharge(ctx context.Context, cp ChargePoint, sessions *SessionManag
 			return fmt.Errorf("MeterValues unconfirmed; transaction %d may remain open: %w", txID, err)
 		}
 	}
-	_ = sessions.RequestStop(opts.Connector)
-	if _, err := cp.StopTransaction(meterWh, types.Now(), txID, func(r *core.StopTransactionRequest) {
-		r.Reason = core.ReasonLocal
-	}); err != nil {
+	remoteStop, err := sessions.BeginStop(opts.Connector, txID)
+	if err != nil {
+		// No StopTransaction has been sent. Do not claim completion.
+		return fmt.Errorf("cannot claim StopTransaction %d: %w", txID, err)
+	}
+	reason := core.ReasonLocal
+	if remoteStop {
+		reason = core.ReasonRemote
+	}
+	confirmation, err := cp.StopTransaction(meterWh, types.Now(), txID, func(r *core.StopTransactionRequest) {
+		r.Reason = reason
+	})
+	if err != nil {
 		return fmt.Errorf("StopTransaction unconfirmed; transaction %d may remain open: %w", txID, err)
+	}
+	if confirmation == nil {
+		return fmt.Errorf("StopTransaction missing confirmation; transaction %d may remain open", txID)
 	}
 	if err := remoteAvailable(cp, opts.Connector); err != nil {
 		return fmt.Errorf("StopTransaction confirmed, Available failed for transaction %d: %w", txID, err)

@@ -8,11 +8,12 @@ import (
  "github.com/lorenzodonini/ocpp-go/ocpp1.6/types"
 )
 
-// RemoteHandler is a conservative OCPP 1.6 Core handler. Remote starts/stops
-// remain rejected until transaction lifecycle dispatch is connected.
+// RemoteHandler acknowledges only validated commands admitted by the dispatcher.
+// Reset remains rejected until its lifecycle is implemented.
 type RemoteHandler struct {
  Ledger *ConnectorLedger
  StartRemote func(*core.RemoteStartTransactionRequest) bool
+ StopRemote func(*core.RemoteStopTransactionRequest) bool
  mu sync.Mutex
  heartbeat int
  heartbeatUpdates chan int
@@ -25,8 +26,12 @@ func (h *RemoteHandler) OnRemoteStartTransaction(request *core.RemoteStartTransa
  }
  return core.NewRemoteStartTransactionConfirmation(status),nil
 }
-func (h *RemoteHandler) OnRemoteStopTransaction(_ *core.RemoteStopTransactionRequest)(*core.RemoteStopTransactionConfirmation,error){
- return core.NewRemoteStopTransactionConfirmation(types.RemoteStartStopStatusRejected),nil
+func (h *RemoteHandler) OnRemoteStopTransaction(request *core.RemoteStopTransactionRequest)(*core.RemoteStopTransactionConfirmation,error){
+ status := types.RemoteStartStopStatusRejected
+ if h.StopRemote != nil && h.StopRemote(request) {
+  status = types.RemoteStartStopStatusAccepted
+ }
+ return core.NewRemoteStopTransactionConfirmation(status),nil
 }
 func (h *RemoteHandler) OnReset(_ *core.ResetRequest)(*core.ResetConfirmation,error){
  return core.NewResetConfirmation(core.ResetStatusRejected),nil

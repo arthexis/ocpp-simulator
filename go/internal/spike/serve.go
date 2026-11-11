@@ -118,6 +118,7 @@ func Serve(ctx context.Context, o ServeOptions) error {
   remoteHandler = &RemoteHandler{
    Ledger: sessions.ledger,
    StartRemote: dispatcher.TryStart,
+   StopRemote: dispatcher.TryStop,
    heartbeatUpdates: heartbeatUpdates,
   }
   cp.SetCoreHandler(remoteHandler)

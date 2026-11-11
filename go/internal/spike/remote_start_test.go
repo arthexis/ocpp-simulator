@@ -21,6 +21,12 @@ type remoteTestCP struct {
 	authGate   <-chan struct{}
 	startGate  <-chan struct{}
 	startErr   error
+	stopErr    error
+	stopNil    bool
+	stopGate   <-chan struct{}
+	stopEntered chan struct{}
+	stopReason core.Reason
+	stopCount  int
 	txID       int
 }
 
@@ -61,8 +67,31 @@ func (cp *remoteTestCP) MeterValues(_ int, _ []types.MeterValue, _ ...func(*core
 	cp.record("MeterValues")
 	return &core.MeterValuesConfirmation{}, nil
 }
-func (cp *remoteTestCP) StopTransaction(_ int, _ *types.DateTime, _ int, _ ...func(*core.StopTransactionRequest)) (*core.StopTransactionConfirmation, error) {
-	cp.record("StopTransaction")
+func (cp *remoteTestCP) StopTransaction(_ int, _ *types.DateTime, txID int, props ...func(*core.StopTransactionRequest)) (*core.StopTransactionConfirmation, error) {
+	req := core.NewStopTransactionRequest(0, types.Now(), txID)
+	for _, prop := range props {
+		prop(req)
+	}
+	cp.mu.Lock()
+	cp.events = append(cp.events, "StopTransaction")
+	cp.stopReason = req.Reason
+	cp.stopCount++
+	cp.mu.Unlock()
+	if cp.stopEntered != nil {
+		select {
+		case cp.stopEntered <- struct{}{}:
+		default:
+		}
+	}
+	if cp.stopGate != nil {
+		<-cp.stopGate
+	}
+	if cp.stopErr != nil {
+		return nil, cp.stopErr
+	}
+	if cp.stopNil {
+		return nil, nil
+	}
 	return &core.StopTransactionConfirmation{}, nil
 }
 func remoteTestOptions() ChargeOptions {
@@ -292,5 +321,163 @@ func TestRemoteSettingsValidation(t *testing.T) {
 	defaults, err := (RemoteChargeSettings{}).normalized()
 	if err != nil || defaults.Duration != defaultRemoteDuration || defaults.PowerKW != 7.2 {
 		t.Fatalf("bad defaults: %+v %v", defaults, err)
+	}
+}
+
+func TestR3RemoteStopSessionRoutingAndDedup(t *testing.T) {
+	m, err := NewSessionManager(context.Background(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	ctx1, err := m.Reserve(1)
+	if err != nil { t.Fatal(err) }
+	ctx2, err := m.Reserve(2)
+	if err != nil { t.Fatal(err) }
+	if err := m.Start(1, 311); err != nil { t.Fatal(err) }
+	if err := m.Start(2, 312); err != nil { t.Fatal(err) }
+	for _, id := range []int{-1, 0, 310, 313} {
+		if _, err := m.RequestRemoteStop(id); err == nil {
+			t.Fatalf("accepted unknown tx %d", id)
+		}
+	}
+	connector, err := m.RequestRemoteStop(311)
+	if err != nil || connector != 1 { t.Fatal(connector, err) }
+	connector, err = m.RequestRemoteStop(311)
+	if err != nil || connector != 1 { t.Fatal("duplicate not idempotent", connector, err) }
+	select {
+	case <-ctx1.Done():
+	default:
+		t.Fatal("owning connector was not canceled")
+	}
+	select {
+	case <-ctx2.Done():
+		t.Fatal("unrelated connector was canceled")
+	default:
+	}
+	requireSessionState(t, m, 1, SessionStopping, 311)
+	requireSessionState(t, m, 2, SessionCharging, 312)
+	remote, err := m.BeginStop(1, 311)
+	if err != nil || !remote { t.Fatal("expected frozen Remote reason", remote, err) }
+	if _, err := m.BeginStop(1, 311); err == nil {
+		t.Fatal("second StopTransaction attempt admitted")
+	}
+	if _, err := m.RequestRemoteStop(311); err != nil {
+		t.Fatal("duplicate in-flight stop should be idempotent:", err)
+	}
+	if err := m.Finish(1, 311); err != nil { t.Fatal(err) }
+	if _, err := m.RequestRemoteStop(311); err == nil {
+		t.Fatal("stale transaction ID accepted after confirmed finish")
+	}
+	if err := m.Finish(2, 312); err != nil { t.Fatal(err) }
+}
+
+func TestR3RemoteStopAfterNaturalStopClaimRejected(t *testing.T) {
+	m, _ := NewSessionManager(context.Background(), 1)
+	defer m.Close()
+	_, _ = m.Reserve(1)
+	if err := m.Start(1, 411); err != nil { t.Fatal(err) }
+	remote, err := m.BeginStop(1, 411)
+	if err != nil || remote { t.Fatal("natural completion must stay Local", remote, err) }
+	if _, err := m.RequestRemoteStop(411); err == nil {
+		t.Fatal("accepted remote stop after natural StopTransaction was claimed")
+	}
+	if err := m.Finish(1, 411); err != nil { t.Fatal(err) }
+}
+
+func TestR3RemoteStopHandlerValidatesAndLeavesResetRejected(t *testing.T) {
+	m, _ := NewSessionManager(context.Background(), 1)
+	cp := remoteAcceptedFake()
+	d, err := NewRemoteStartDispatcher(m, cp, RemoteChargeSettings{})
+	if err != nil { t.Fatal(err) }
+	defer d.Close()
+	if err := d.Enable(); err != nil { t.Fatal(err) }
+	h := &RemoteHandler{Ledger:m.ledger, StopRemote:d.TryStop}
+	for _, req := range []*core.RemoteStopTransactionRequest{nil, {TransactionId:0}, {TransactionId:-1}, {TransactionId:999}} {
+		c, err := h.OnRemoteStopTransaction(req)
+		if err != nil || c.Status != types.RemoteStartStopStatusRejected { t.Fatal("invalid RemoteStop accepted", req, c, err) }
+	}
+	_, err = m.Reserve(1)
+	if err != nil { t.Fatal(err) }
+	c, err := h.OnRemoteStopTransaction(&core.RemoteStopTransactionRequest{TransactionId:511})
+	if err != nil || c.Status != types.RemoteStartStopStatusRejected { t.Fatal("unstarted tx accepted", c, err) }
+	if err := m.Start(1, 511); err != nil { t.Fatal(err) }
+	c, err = h.OnRemoteStopTransaction(&core.RemoteStopTransactionRequest{TransactionId:511})
+	if err != nil || c.Status != types.RemoteStartStopStatusAccepted { t.Fatal("real session not accepted", c, err) }
+	c, err = h.OnRemoteStopTransaction(&core.RemoteStopTransactionRequest{TransactionId:511})
+	if err != nil || c.Status != types.RemoteStartStopStatusAccepted { t.Fatal("duplicate not idempotent", c, err) }
+	reset, err := h.OnReset(&core.ResetRequest{})
+	if err != nil || reset.Status != core.ResetStatusRejected { t.Fatal("Reset must stay rejected", reset, err) }
+}
+
+func TestR3StopReasonRemoteAndUnknownStopConfirmation(t *testing.T) {
+	for _, tc := range []struct{
+		name string
+		stopErr error
+		stopNil bool
+		wantState SessionState
+	}{
+		{"confirmed", nil, false, SessionAvailable},
+		{"lost stop acknowledgement", errors.New("socket lost"), false, SessionStopping},
+		{"missing stop acknowledgement", nil, true, SessionStopping},
+	}{
+		t.Run(tc.name,func(t *testing.T){
+			gate := make(chan struct{})
+			entered := make(chan struct{}, 1)
+			cp := remoteAcceptedFake()
+			cp.stopGate = gate
+			cp.stopEntered = entered
+			cp.stopErr = tc.stopErr
+			cp.stopNil = tc.stopNil
+			m, _ := NewSessionManager(context.Background(), 1)
+			defer m.Close()
+			ctx, err := m.Reserve(1)
+			if err != nil { t.Fatal(err) }
+			result := make(chan error, 1)
+			opts := remoteTestOptions()
+			opts.Duration = 5*time.Second
+			go func() { result <- RunRemoteCharge(ctx, cp, m, opts) }()
+			deadline := time.Now().Add(2*time.Second)
+			for {
+				snap, _ := m.Snapshot(1)
+				if snap.State == SessionCharging {
+					break
+				}
+				if time.Now().After(deadline) { t.Fatal("never reached Charging") }
+				time.Sleep(time.Millisecond)
+			}
+			if _, err := m.RequestRemoteStop(91); err != nil { t.Fatal(err) }
+			select {
+			case <-entered:
+			case <-time.After(2*time.Second):
+				t.Fatal("StopTransaction not sent")
+			}
+			cp.mu.Lock()
+			reason, count := cp.stopReason, cp.stopCount
+			cp.mu.Unlock()
+			if reason != core.ReasonRemote || count != 1 {
+				t.Fatalf("reason/count=%s/%d",reason,count)
+			}
+			// The stop request was sent but CSMS confirmation is withheld.
+			requireSessionState(t,m,1,SessionStopping,91)
+			if _,err := m.Reserve(1);err==nil {t.Fatal("slot reused before confirmation")}
+			if _,err := m.RequestRemoteStop(91);err!=nil {t.Fatal("repeat must deduplicate",err)}
+			close(gate)
+			select {
+			case err := <-result:
+				if tc.wantState == SessionAvailable && err!=nil {t.Fatal(err)}
+				if tc.wantState == SessionStopping && err==nil {t.Fatal("unconfirmed stop reported success")}
+			case <-time.After(3*time.Second):
+				t.Fatal("session did not terminate")
+			}
+			requireSessionState(t,m,1,tc.wantState,func() int {if tc.wantState==SessionAvailable{return 0};return 91}())
+			cp.mu.Lock()
+			count = cp.stopCount
+			cp.mu.Unlock()
+			if count != 1 {t.Fatalf("sent %d StopTransaction calls",count)}
+			if tc.wantState == SessionStopping && strings.Contains(cp.history(),"Available") {
+				t.Fatalf("invented Available after failure: %s",cp.history())
+			}
+		})
 	}
 }
