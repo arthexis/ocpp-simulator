@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -97,7 +98,7 @@ func (o ServeOptions) tlsConfig() (*tls.Config, error) {
 
 // Serve stays connected, sends periodic Heartbeats at the interval issued by
 // the CSMS, and exits without retry after cancellation or disconnection.
-func Serve(ctx context.Context, o ServeOptions) error {
+func Serve(ctx context.Context, o ServeOptions) (resultErr error) {
 	if err := ValidateServe(o); err != nil {
 		return err
 	}
@@ -130,6 +131,7 @@ func Serve(ctx context.Context, o ServeOptions) error {
    Ledger: sessions.ledger,
    StartRemote: dispatcher.TryStart,
    StopRemote: dispatcher.TryStop,
+   ResetRemote: dispatcher.TryReset,
    heartbeatUpdates: heartbeatUpdates,
   }
   cp.SetCoreHandler(remoteHandler)
@@ -140,14 +142,31 @@ func Serve(ctx context.Context, o ServeOptions) error {
 	}
 	defer cp.Stop()
  if dispatcher != nil {
-  // The worker shutdown runs before cp.Stop (LIFO defer order).
-  // Bounded waiting lets in-flight StopTransaction finish when connected.
+  // Worker shutdown precedes cp.Stop. Soft reset and signal exits allow a
+  // bounded grace for confirmed closes; Hard never fabricates a close.
   defer func() {
    dispatcher.Close()
+   timedOut:=false
    select {
    case <-dispatcher.Done():
    case <-time.After(3*time.Second):
-    fmt.Fprintln(os.Stderr,"remote worker shutdown timed out; unconfirmed transactions remain in local evidence")
+    timedOut=true
+   }
+   unresolved:=sessions.Unresolved()
+   if timedOut || len(unresolved)>0 || sessions.ResetMode()!="" {
+    evidence:=struct{
+     Event string `json:"event"`
+     Mode string `json:"mode"`
+     Reconnect string `json:"reconnect"`
+     WorkersTimedOut bool `json:"workers_timed_out"`
+     Unresolved []SessionSnapshot `json:"unresolved"`
+    }{Event:"ocpp_simulator_shutdown",Mode:string(sessions.ResetMode()),
+      Reconnect:"disabled_until_reconciled",WorkersTimedOut:timedOut,Unresolved:unresolved}
+    encoded,_:=json.Marshal(evidence)
+    fmt.Fprintf(os.Stderr,"%s\n",encoded)
+    if (timedOut || len(unresolved)>0) && resultErr==nil {
+      resultErr=fmt.Errorf("unresolved OCPP sessions; manual reconciliation required")
+    }
    }
   }()
  }
@@ -191,8 +210,10 @@ func Serve(ctx context.Context, o ServeOptions) error {
 	defer ticker.Stop()
 	var chargingDone <-chan error
  var remoteErrors <-chan error
+ var resets <-chan core.ResetType
  if dispatcher != nil {
   remoteErrors = dispatcher.Errors()
+  resets = dispatcher.ResetEvents()
  }
 	if o.Charge != nil {
 		finished := make(chan error,1)
@@ -211,6 +232,15 @@ func Serve(ctx context.Context, o ServeOptions) error {
 			}
 			return nil
 		case err := <-client.Disconnected(): return fmt.Errorf("CSMS disconnected: %w", err)
+        case mode := <-resets:
+         // OCPP handlers do not expose confirmation-flushed callbacks.
+         // Allow the accepted ResetConfirmation a bounded chance to leave
+         // the WebSocket before terminating this client. No auto reconnect.
+         select {
+         case <-time.After(100*time.Millisecond):
+         case <-ctx.Done():
+         }
+         return fmt.Errorf("OCPP %s reset: controlled termination; automatic reconnect disabled", mode)
 		case err := <-chargingDone: return err
         case remoteErr := <-remoteErrors:
          fmt.Fprintf(os.Stderr,"remote session: %v\n",remoteErr)

@@ -9,11 +9,12 @@ import (
 )
 
 // RemoteHandler acknowledges only validated commands admitted by the dispatcher.
-// Reset remains rejected until its lifecycle is implemented.
+// Reset can be accepted only by the bounded reset coordinator.
 type RemoteHandler struct {
  Ledger *ConnectorLedger
  StartRemote func(*core.RemoteStartTransactionRequest) bool
  StopRemote func(*core.RemoteStopTransactionRequest) bool
+ ResetRemote func(*core.ResetRequest) bool
  mu sync.Mutex
  heartbeat int
  heartbeatUpdates chan int
@@ -33,8 +34,12 @@ func (h *RemoteHandler) OnRemoteStopTransaction(request *core.RemoteStopTransact
  }
  return core.NewRemoteStopTransactionConfirmation(status),nil
 }
-func (h *RemoteHandler) OnReset(_ *core.ResetRequest)(*core.ResetConfirmation,error){
- return core.NewResetConfirmation(core.ResetStatusRejected),nil
+func (h *RemoteHandler) OnReset(request *core.ResetRequest)(*core.ResetConfirmation,error){
+ status:=core.ResetStatusRejected
+ if h.ResetRemote!=nil && h.ResetRemote(request) {
+  status=core.ResetStatusAccepted
+ }
+ return core.NewResetConfirmation(status),nil
 }
 func (h *RemoteHandler) OnChangeAvailability(_ *core.ChangeAvailabilityRequest)(*core.ChangeAvailabilityConfirmation,error){
  return core.NewChangeAvailabilityConfirmation(core.AvailabilityStatusRejected),nil

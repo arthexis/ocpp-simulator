@@ -136,6 +136,7 @@ type RemoteStartDispatcher struct {
 	ready     bool
 	closed    bool
 	started   bool
+	resetEvents chan core.ResetType
 }
 
 func NewRemoteStartDispatcher(sessions *SessionManager, cp ChargePoint, settings RemoteChargeSettings) (*RemoteStartDispatcher, error) {
@@ -154,6 +155,7 @@ func NewRemoteStartDispatcher(sessions *SessionManager, cp ChargePoint, settings
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
 		errors:   make(chan error, len(sessions.slots)),
+		resetEvents: make(chan core.ResetType,1),
 	}
 	if settings.BatteryKWh > 0 {
 		d.batteries = make([]*remoteBatterySlot, len(sessions.slots))
@@ -264,6 +266,34 @@ func (d *RemoteStartDispatcher) TryStop(request *core.RemoteStopTransactionReque
 	return err == nil
 }
 
+// TryReset atomically blocks new starts/stops and cancels connector contexts.
+// The OCPP handler only enqueues a reset notification: network teardown must
+// happen in the Serve loop, after ResetConfirmation can be sent.
+func (d *RemoteStartDispatcher) TryReset(request *core.ResetRequest) bool {
+	if request == nil || (request.Type != core.ResetTypeSoft && request.Type != core.ResetTypeHard) {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed || !d.ready || d.sessions.parent.Err() != nil {
+		return false
+	}
+	if err := d.sessions.BeginReset(request.Type); err != nil {
+		return false
+	}
+	d.ready = false
+	select {
+	case d.resetEvents <- request.Type:
+		return true
+	default:
+		return false // unreachable under d.mu; fail closed
+	}
+}
+
+func (d *RemoteStartDispatcher) ResetEvents() <-chan core.ResetType {
+	return d.resetEvents
+}
+
 func (d *RemoteStartDispatcher) report(err error) {
 	if err == nil {
 		return
@@ -347,6 +377,7 @@ func runRemoteCharge(ctx context.Context, cp ChargePoint, sessions *SessionManag
 		_ = sessions.Abort(opts.Connector)
 		return fmt.Errorf("connector %d battery is full", opts.Connector)
 	}
+	if sessions.IsHardReset() { return fmt.Errorf("hard reset interrupted connector %d", opts.Connector) }
 	if err := ctx.Err(); err != nil {
 		_ = sessions.Abort(opts.Connector)
 		return err
@@ -357,12 +388,14 @@ func runRemoteCharge(ctx context.Context, cp ChargePoint, sessions *SessionManag
 		_ = sessions.Abort(opts.Connector)
 		return fmt.Errorf("Preparing: %w", err)
 	}
+	if sessions.IsHardReset() { return fmt.Errorf("hard reset interrupted connector %d after Preparing", opts.Connector) }
 	if err := ctx.Err(); err != nil {
 		_ = remoteAvailable(cp, opts.Connector)
 		_ = sessions.Abort(opts.Connector)
 		return err
 	}
 	authorized, err := cp.Authorize(opts.RFID)
+	if sessions.IsHardReset() { return fmt.Errorf("hard reset interrupted connector %d after Authorize", opts.Connector) }
 	if err != nil {
 		_ = sessions.Abort(opts.Connector)
 		return fmt.Errorf("Authorize: %w", err)
@@ -375,6 +408,7 @@ func runRemoteCharge(ctx context.Context, cp ChargePoint, sessions *SessionManag
 		}
 		return fmt.Errorf("rfid_not_authorized")
 	}
+	if sessions.IsHardReset() { return fmt.Errorf("hard reset interrupted connector %d before StartTransaction", opts.Connector) }
 	if err := ctx.Err(); err != nil {
 		_ = remoteAvailable(cp, opts.Connector)
 		_ = sessions.Abort(opts.Connector)
@@ -386,6 +420,14 @@ func runRemoteCharge(ctx context.Context, cp ChargePoint, sessions *SessionManag
 		return fmt.Errorf("begin start: %w", err)
 	}
 	started, err := cp.StartTransaction(opts.Connector, opts.RFID, 0, types.Now())
+	if sessions.IsHardReset() {
+		// Record any definitive late ID but never initiate a fabricated stop.
+		if err == nil && started != nil && started.IdTagInfo != nil &&
+			started.IdTagInfo.Status == types.AuthorizationStatusAccepted {
+			_ = sessions.Start(opts.Connector, started.TransactionId)
+		}
+		return fmt.Errorf("hard reset interrupted StartTransaction on connector %d", opts.Connector)
+	}
 	if err != nil {
 		// No confirmation: the CSMS may already have a transaction. Keep
 		// Starting reserved until shutdown; never claim a verified closure.
@@ -410,12 +452,14 @@ func runRemoteCharge(ctx context.Context, cp ChargePoint, sessions *SessionManag
 		// retain the pending slot rather than invent a closure.
 		return fmt.Errorf("cannot record CSMS transaction %d: %w", txID, err)
 	}
+	if sessions.IsHardReset() { return fmt.Errorf("hard reset interrupted transaction %d", txID) }
 	if ctx.Err() == nil {
 		if _, err := cp.StatusNotification(opts.Connector, core.NoError, core.ChargePointStatusCharging); err != nil {
 			_ = sessions.RequestStop(opts.Connector)
 			return fmt.Errorf("Charging status failed; transaction %d may remain open: %w", txID, err)
 		}
 	}
+	if sessions.IsHardReset() { return fmt.Errorf("hard reset interrupted transaction %d after Charging", txID) }
 	// Meter energy is relative to this transaction even when the connector's
 	// battery carries prior-session energy. Elapsed time is deterministic.
 	var initialBatteryWh float64
@@ -428,6 +472,7 @@ func runRemoteCharge(ctx context.Context, cp ChargePoint, sessions *SessionManag
 			step = remaining
 		}
 		if !waitStep(ctx, step) { break }
+		if sessions.IsHardReset() { return fmt.Errorf("hard reset interrupted transaction %d during metering", txID) }
 		// Cancellation between the timer and energy integration must not
 		// consume an additional full interval after a RemoteStop request.
 		if ctx.Err() != nil { break }
@@ -450,20 +495,19 @@ func runRemoteCharge(ctx context.Context, cp ChargePoint, sessions *SessionManag
 			samples = []types.SampledValue{{Value:fmt.Sprintf("%d", meterWh), Measurand:types.MeasurandEnergyActiveImportRegister, Unit:types.UnitOfMeasureWh}}
 		}
 		values := []types.MeterValue{{Timestamp:types.Now(), SampledValue:samples}}
+		if sessions.IsHardReset() { return fmt.Errorf("hard reset interrupted transaction %d before MeterValues", txID) }
 		if _, err := cp.MeterValues(opts.Connector, values, func(r *core.MeterValuesRequest) { r.TransactionId = &txID }); err != nil {
 			_ = sessions.RequestStop(opts.Connector)
 			return fmt.Errorf("MeterValues unconfirmed; transaction %d may remain open: %w", txID, err)
 		}
 	}
-	remoteStop, err := sessions.BeginStop(opts.Connector, txID)
+	if sessions.IsHardReset() { return fmt.Errorf("hard reset forbids StopTransaction on %d", txID) }
+	reason, err := sessions.BeginStopReason(opts.Connector, txID)
 	if err != nil {
 		// No StopTransaction has been sent. Do not claim completion.
 		return fmt.Errorf("cannot claim StopTransaction %d: %w", txID, err)
 	}
-	reason := core.ReasonLocal
-	if remoteStop {
-		reason = core.ReasonRemote
-	}
+	if sessions.IsHardReset() { return fmt.Errorf("hard reset interrupted claimed StopTransaction %d", txID) }
 	confirmation, err := cp.StopTransaction(meterWh, types.Now(), txID, func(r *core.StopTransactionRequest) {
 		r.Reason = reason
 	})
@@ -472,6 +516,9 @@ func runRemoteCharge(ctx context.Context, cp ChargePoint, sessions *SessionManag
 	}
 	if confirmation == nil {
 		return fmt.Errorf("StopTransaction missing confirmation; transaction %d may remain open", txID)
+	}
+	if sessions.IsHardReset() {
+		return fmt.Errorf("hard reset after StopTransaction response; do not announce Available for %d", txID)
 	}
 	if err := remoteAvailable(cp, opts.Connector); err != nil {
 		return fmt.Errorf("StopTransaction confirmed, Available failed for transaction %d: %w", txID, err)

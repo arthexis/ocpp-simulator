@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"github.com/lorenzodonini/ocpp-go/ocpp1.6/core"
 )
 
 // SessionState describes local connector ownership, not an OCPP confirmation.
@@ -42,6 +44,7 @@ type SessionManager struct {
 	ledger     *ConnectorLedger
 	slots      []managedSession // connector IDs start at 1; slot 0 is unused
 	closed     bool
+	resetMode  core.ResetType
 	announcing bool
 	announced  bool
 	stopParent func() bool
@@ -258,24 +261,69 @@ func (m *SessionManager) RequestRemoteStop(transactionID int) (int, error) {
 	return connector, nil
 }
 
-// BeginStop claims the single StopTransaction attempt and freezes its reason.
-// A new RemoteStop arriving after a Local stop was claimed must be rejected;
-// previously accepted RemoteStop retries can still be acknowledged idempotently.
-func (m *SessionManager) BeginStop(connector, transactionID int) (bool, error) {
+// BeginStopReason claims the single StopTransaction send and freezes its
+// reason under the session lock. Hard reset prohibits new OCPP stop calls;
+// Soft reset uses the OCPP SoftReset reason unless a RemoteStop was already
+// accepted. A previously claimed reason never changes.
+func (m *SessionManager) BeginStopReason(connector, transactionID int) (core.Reason, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.validConnector(connector) || transactionID <= 0 {
-		return false, fmt.Errorf("invalid stop identity")
+		return "", fmt.Errorf("invalid stop identity")
 	}
 	slot := &m.slots[connector]
-	if slot.transactionID != transactionID ||
+	if m.resetMode == core.ResetTypeHard ||
+		slot.transactionID != transactionID ||
 		(slot.state != SessionCharging && slot.state != SessionStopping) ||
 		slot.stopIssued {
-		return false, fmt.Errorf("transaction %d has no unclaimed stop", transactionID)
+		return "", fmt.Errorf("transaction %d cannot claim a new stop", transactionID)
+	}
+	reason := core.ReasonLocal
+	if slot.remoteStop {
+		reason = core.ReasonRemote
+	} else if m.resetMode == core.ResetTypeSoft {
+		reason = core.ReasonSoftReset
 	}
 	slot.state = SessionStopping
 	slot.stopIssued = true
-	return slot.remoteStop, nil
+	return reason, nil
+}
+
+// BeginStop remains compatible with R3's boolean remote-reason contract.
+func (m *SessionManager) BeginStop(connector, transactionID int) (bool, error) {
+	reason, err := m.BeginStopReason(connector, transactionID)
+	return reason == core.ReasonRemote, err
+}
+
+// IsHardReset is checked before new OCPP calls. It cannot revoke an in-flight
+// WebSocket call, so late or ambiguous responses remain fail-closed.
+func (m *SessionManager) IsHardReset() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.resetMode == core.ResetTypeHard
+}
+
+func (m *SessionManager) ResetMode() core.ResetType {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.resetMode
+}
+
+// Unresolved snapshots pending and acknowledged transaction ownership. The
+// caller must log these before exiting; no durable replay exists in R5.
+func (m *SessionManager) Unresolved() []SessionSnapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var unresolved []SessionSnapshot
+	for connector := 1; connector < len(m.slots); connector++ {
+		slot := m.slots[connector]
+		if slot.state != SessionAvailable {
+			unresolved = append(unresolved, SessionSnapshot{
+				Connector: connector, State: slot.state, TransactionID: slot.transactionID,
+			})
+		}
+	}
+	return unresolved
 }
 
 // Finish must be called only after confirmed transaction closure. It remains
@@ -349,15 +397,17 @@ func (m *SessionManager) AnnounceInitialAvailable(ctx context.Context, notify fu
 	return nil
 }
 
-// Close is idempotent. Pending reservations are released, but active
-// transaction IDs remain recorded as Stopping until a verified Finish.
-func (m *SessionManager) Close() {
+// shutdown atomically denies new reservations and cancels owned contexts.
+// It retains both acknowledged transaction IDs and ambiguous Starting slots;
+// only explicit CSMS confirmations allow Finish to clear these records.
+func (m *SessionManager) shutdown(mode core.ResetType) bool {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
-		return
+		return false
 	}
 	m.closed = true
+	m.resetMode = mode
 	for connector := 1; connector < len(m.slots); connector++ {
 		slot := &m.slots[connector]
 		switch slot.state {
@@ -377,7 +427,24 @@ func (m *SessionManager) Close() {
 	stop := m.stopParent
 	m.stopParent = nil
 	m.mu.Unlock()
-	if stop != nil {
-		stop()
+	if stop != nil { stop() }
+	return true
+}
+
+// BeginReset initiates one soft or hard reset; duplicate or conflicting Reset
+// commands are rejected rather than silently changing the existing mode.
+func (m *SessionManager) BeginReset(mode core.ResetType) error {
+	if mode != core.ResetTypeSoft && mode != core.ResetTypeHard {
+		return fmt.Errorf("invalid reset type %q", mode)
 	}
+	if !m.shutdown(mode) {
+		return fmt.Errorf("reset or shutdown already in progress")
+	}
+	return nil
+}
+
+// Close is idempotent. An ordinary shutdown permits verified StopTransaction
+// for active sessions; a Hard reset does not fabricate any shutdown receipt.
+func (m *SessionManager) Close() {
+	m.shutdown("")
 }
