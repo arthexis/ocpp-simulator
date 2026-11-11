@@ -72,6 +72,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ github.sha }}
+          OCPP_SIMULATOR_EXPECTED_MAIN_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           test "$(gh api repos/arthexis/ocpp-simulator/branches/main --jq '.commit.sha')" = "$TARGET_SHA"

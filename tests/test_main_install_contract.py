@@ -120,3 +120,50 @@ def test_workflow_main_only_and_no_service_start():
     assert "ansible.builtin.systemd:" not in tasks
     assert "ansible.builtin.service:" not in tasks
     assert "./cmd/r6c3b2-uidlab" in tasks
+
+
+def test_main_fence_fail_closed_offline(monkeypatch):
+    """Never contact GitHub; exercise same, drift, invalid and timeout."""
+    fence = runpy.run_path(str(ROOT / "scripts" / "verify_main_head.py"))
+    fence["assert_main_is"](SHA, SHA)
+    for wrong in (OLD, "", "invalid", "0" * 39, "g" * 40):
+        with pytest.raises(ValueError):
+            fence["assert_main_is"](SHA, wrong)
+    with pytest.raises(ValueError):
+        fence["assert_main_is"]("", SHA)
+
+    class Result:
+        stdout = SHA + "\n"
+    calls = []
+    def good(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return Result()
+    monkeypatch.setattr("subprocess.run", good)
+    assert fence["main"]([SHA]) == 0
+    assert calls[0][0] == ["gh", "api", "repos/arthexis/ocpp-simulator/branches/main", "--jq", ".commit.sha"]
+    assert calls[0][1]["timeout"] == 20
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: type("Result", (), {"stdout": OLD + "\n"})())
+    assert fence["main"]([SHA]) == 1
+    def timeout(*args, **kwargs):
+        import subprocess
+        raise subprocess.TimeoutExpired(cmd="gh", timeout=20)
+    monkeypatch.setattr("subprocess.run", timeout)
+    assert fence["main"]([SHA]) == 1
+    assert fence["main"](["invalid"]) == 1
+    assert fence["main"]([]) == 2
+
+
+def test_main_fence_is_between_build_and_pointer_writes():
+    role = (ROOT / "ansible/roles/ocpp_simulator/tasks/main.yml").read_text(encoding="utf-8")
+    build = role.index("- name: Build isolated LAB-6 client")
+    guard = role.index("- name: Reject superseded main immediately before mutating release pointers")
+    previous = role.index("- name: Preserve previous release before changing current")
+    activate = role.index("- name: Activate requested revision")
+    assert build < guard < previous < activate
+    assert "OCPP_SIMULATOR_EXPECTED_MAIN_SHA" in role
+    assert "ocpp_simulator_activate | bool" in role[guard:previous]
+    assert "ocpp_simulator_expected_main_sha != ''" in role[guard:previous]
+    workflow = (ROOT / ".github/workflows/deploy-main.yml").read_text(encoding="utf-8")
+    assert "OCPP_SIMULATOR_EXPECTED_MAIN_SHA: ${{ github.sha }}" in workflow
+    assert "GH_TOKEN: ${{ github.token }}" in workflow

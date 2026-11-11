@@ -40,3 +40,22 @@ installer creates a different immutable SHA release. Actual arrival at gway-001
 must be verified against the exact post-merge SHA after an explicitly approved
 merge. `BeforeAvailable=Quarantined` and R6 remains unchecked; no
 `CleanVerified`, replay, admission, or production Go↔CSMS claim.
+
+## PRE-READY main advancement fence
+
+The main-only workflow passes the opt-in environment variable
+`OCPP_SIMULATOR_EXPECTED_MAIN_SHA` to its existing Ansible deployment step.
+The role rejects an invalid expected value or an SHA different from the
+actual checkout. **After building and validating** both Go executables, and
+immediately **before** changing `previous` or `current`, the role calls
+`scripts/verify_main_head.py` to fetch canonical GitHub `main` using the
+existing Actions `GH_TOKEN`. Drift, missing/invalid data, inaccessible API,
+or timeout abort activation without changing either release pointer.
+Ordinary manual `deploy.sh` runs with no expected SHA retain the original
+behavior. CI mocks the canonical GitHub response and verifies ordering.
+
+**Limitation:** a GitHub HEAD read cannot be atomic with a local symlink
+update. A change to `main` in the tiny interval after the final read can
+still produce transient outdated activation. The only registered runner on
+`gway-001` is scoped to `arthexis/gway-remote`; GitHub reports zero runners
+for `ocpp-simulator`. Thus neither Ready nor merge is permitted yet.

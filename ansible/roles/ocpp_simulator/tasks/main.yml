@@ -19,6 +19,19 @@
       - ocpp_simulator_revision.stdout is match('^[0-9a-f]{40}$')
     fail_msg: A full 40-character Git commit is required for immutable releases.
 
+- name: Capture optional expected main SHA from automatic deployment
+  ansible.builtin.set_fact:
+    ocpp_simulator_expected_main_sha: "{{ lookup('ansible.builtin.env', 'OCPP_SIMULATOR_EXPECTED_MAIN_SHA') }}"
+
+- name: Fail closed on malformed or mismatched expected main SHA
+  ansible.builtin.assert:
+    that:
+      - >-
+        ocpp_simulator_expected_main_sha == '' or
+        (ocpp_simulator_expected_main_sha is match('^[0-9a-f]{40}$') and
+        ocpp_simulator_expected_main_sha == ocpp_simulator_revision.stdout)
+    fail_msg: Automatic deployment SHA must match this exact checkout before staging.
+
 - name: Select immutable release paths
   ansible.builtin.set_fact:
     ocpp_simulator_release: "{{ ocpp_simulator_prefix }}/releases/{{ ocpp_simulator_revision.stdout }}"
@@ -281,6 +294,17 @@
     fail_msg: Simulator previous path exists but is not a managed symlink.
   when: ocpp_simulator_previous_stat.stat.exists | default(false) or
         ocpp_simulator_previous_stat.stat.islnk | default(false)
+
+- name: Reject superseded main immediately before mutating release pointers
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - "{{ ocpp_simulator_source }}/scripts/verify_main_head.py"
+      - "{{ ocpp_simulator_expected_main_sha }}"
+  changed_when: false
+  when:
+    - ocpp_simulator_activate | bool
+    - ocpp_simulator_expected_main_sha != ''
 
 - name: Preserve previous release before changing current
   ansible.builtin.file:
