@@ -151,7 +151,7 @@ func Serve(ctx context.Context, o ServeOptions) (resultErr error) {
 		go func(){cp.Stop();close(done)}()
 		select {
 		case <-done:
-		case <-time.After(2*time.Second):
+		case <-time.After(time.Second):
 			fmt.Fprintln(os.Stderr,"{\"event\":\"ocpp_client_stop_timeout\",\"reconnect\":\"disabled\"}")
 			if resultErr==nil {
 				resultErr=fmt.Errorf("OCPP client stop timeout; manual reconciliation required")
@@ -164,9 +164,15 @@ func Serve(ctx context.Context, o ServeOptions) (resultErr error) {
   defer func() {
    dispatcher.Close()
    timedOut:=false
+   // Graceful Soft gets the full drain window. For an already canceled
+   // signal or lost connection, use a shorter bounded fail-closed exit.
+   drainGrace:=3*time.Second
+   if sessions.ResetMode()!=core.ResetTypeSoft && (ctx.Err()!=nil || resultErr!=nil) {
+    drainGrace=2*time.Second
+   }
    select {
    case <-dispatcher.Done():
-   case <-time.After(3*time.Second):
+   case <-time.After(drainGrace):
     timedOut=true
     // Transport may have a response queue stuck behind an unreachable CSMS.
     // Closing the local WebSocket is safer than falsely finishing a
@@ -175,7 +181,7 @@ func Serve(ctx context.Context, o ServeOptions) (resultErr error) {
     go func(){client.Stop();close(closed)}()
     select {
     case <-closed:
-    case <-time.After(time.Second):
+    case <-time.After(500*time.Millisecond):
       fmt.Fprintln(os.Stderr,"{\"event\":\"ocpp_transport_stop_timeout\",\"reconnect\":\"disabled\"}")
     }
    }
