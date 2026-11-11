@@ -29,7 +29,7 @@ func run(args []string) error {
 	basicPassword := flags.String("basic-password", "", "HTTP Basic password (WSS only; visible in process arguments)")
 	timeout := flags.Float64("connect-timeout", 10, "WebSocket handshake timeout in seconds")
 	connector := flags.Int("connector", 0, "run a single charging transaction then exit")
- remote := flags.Bool("remote", false, "enable bounded RemoteStart and RemoteStop; Reset remains rejected")
+ remote := flags.Bool("remote", false, "enable experimental RemoteStart, RemoteStop and Soft/Hard Reset; no auto-reconnect")
  connectors := flags.Int("connectors", 0, "number of connectors in remote mode (1-128)")
 	rfid := flags.String("rfid", "TEST001", "authorization identifier")
 	power := flags.Float64("power", 7.2, "charging power ceiling in kW")
