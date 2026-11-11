@@ -26,6 +26,9 @@ type ServeOptions struct {
  RemotePowerKW float64
  RemoteDuration time.Duration
  RemoteMeterInterval time.Duration
+ RemoteBatteryKWh float64
+ RemoteBatterySOC float64
+ RemoteBatterySeed uint64
 }
 
 var cpName = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
@@ -58,8 +61,15 @@ func ValidateServe(o ServeOptions) error {
 	if o.Charge != nil { if err := o.Charge.Validate(); err != nil { return err } }
  if o.Remote {
   if _,err:=NewConnectorLedger(o.Connectors);err!=nil {return err}
-  if _,err:=(RemoteChargeSettings{PowerKW:o.RemotePowerKW,Duration:o.RemoteDuration,MeterInterval:o.RemoteMeterInterval}).normalized();err!=nil{return err}
- } else if o.Connectors!=0 {return fmt.Errorf("--connectors requires --remote")}
+  if _,err:=(RemoteChargeSettings{
+   PowerKW:o.RemotePowerKW, Duration:o.RemoteDuration, MeterInterval:o.RemoteMeterInterval,
+   BatteryKWh:o.RemoteBatteryKWh, BatterySOC:o.RemoteBatterySOC, BatterySeed:o.RemoteBatterySeed,
+  }).normalized();err!=nil{return err}
+ } else if o.Connectors!=0 {
+  return fmt.Errorf("--connectors requires --remote")
+ } else if o.RemoteBatteryKWh!=0 || o.RemoteBatterySOC!=0 || o.RemoteBatterySeed!=0 {
+  return fmt.Errorf("remote battery settings require --remote")
+ }
  if o.Charge!=nil && o.Remote {return fmt.Errorf("one-shot --connector and --remote are mutually exclusive")}
 	return nil
 }
@@ -112,6 +122,7 @@ func Serve(ctx context.Context, o ServeOptions) error {
   defer sessions.Close()
   dispatcher, err = NewRemoteStartDispatcher(sessions, cp, RemoteChargeSettings{
    PowerKW:o.RemotePowerKW, Duration:o.RemoteDuration, MeterInterval:o.RemoteMeterInterval,
+   BatteryKWh:o.RemoteBatteryKWh, BatterySOC:o.RemoteBatterySOC, BatterySeed:o.RemoteBatterySeed,
   })
   if err != nil { return err }
   heartbeatUpdates = make(chan int, 1)
