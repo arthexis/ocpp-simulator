@@ -205,7 +205,7 @@ func TestR6C1QuarantinesFreshProcessAfterUnconfirmedTransaction(t *testing.T) {
 	// the attempt BEFORE contacting the synthetic CSMS.
 	second := base
 	second.testOnlyLoopback = false
-	second.RecoveryRoot = t.TempDir()
+	second.RecoveryRoot = r6c1PrivateRoot(t)
 	second.RecoveryTenant = "R6C1"
 	err := Serve(context.Background(), second)
 	if !errors.Is(err, ErrRecoveryQuarantined) {

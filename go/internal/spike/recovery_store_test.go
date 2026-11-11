@@ -12,6 +12,16 @@ import (
 	"time"
 )
 
+func r6c1PrivateRoot(t *testing.T) string {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "private-recovery")
+	if err := os.Mkdir(root, 0700); err != nil { t.Fatal(err) }
+	if fi, err := os.Stat(root); err != nil || fi.Mode().Perm()!=0700 {
+		t.Fatalf("test private root must be 0700: %v %v",fi,err)
+	}
+	return root
+}
+
 func r6c1Identity() RecoveryIdentity {
 	return RecoveryIdentity{
 		Tenant: "isolated-fixture",
@@ -22,7 +32,7 @@ func r6c1Identity() RecoveryIdentity {
 }
 
 func TestR6C1PrivateSQLiteQuarantineGenerationAndRecovery(t *testing.T) {
-	root := t.TempDir()
+	root := r6c1PrivateRoot(t)
 	id := r6c1Identity()
 	ctx := context.Background()
 	first, err := OpenSQLiteRecoveryStore(root, id)
@@ -69,7 +79,7 @@ func TestR6C1PrivateSQLiteQuarantineGenerationAndRecovery(t *testing.T) {
 }
 
 func TestR6C1MissingIdentityAndUntrustedStore(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "new-private-root")
+	root := filepath.Join(r6c1PrivateRoot(t), "new-private-root")
 	id := r6c1Identity()
 	for _,bad:=range []RecoveryIdentity{
 		{}, {Tenant:"x",CP:"../bad",CSMS:id.CSMS,Connectors:2},
@@ -175,7 +185,7 @@ func TestR6C1FsyncAndWriteFailureInjectionNeverUnlock(t *testing.T) {
 }
 
 func TestR6C1TransactionalConstraintRejectsConflictingTransaction(t *testing.T) {
-	s,err:=OpenSQLiteRecoveryStore(t.TempDir(),r6c1Identity())
+	s,err:=OpenSQLiteRecoveryStore(r6c1PrivateRoot(t),r6c1Identity())
 	if err!=nil{t.Fatal(err)}
 	defer s.Close()
 	ctx:=context.Background()
@@ -212,7 +222,7 @@ func TestR6C1RemoteServeDeniedBeforeOpeningWebSocket(t *testing.T) {
 
 func TestR6C1RecoveryGateDoesNotClaimCleanVerification(t *testing.T) {
 	var gate RecoveryGate
-	store,err:=OpenSQLiteRecoveryStore(t.TempDir(),r6c1Identity())
+	store,err:=OpenSQLiteRecoveryStore(r6c1PrivateRoot(t),r6c1Identity())
 	if err!=nil{t.Fatal(err)}
 	defer store.Close()
 	gate=store

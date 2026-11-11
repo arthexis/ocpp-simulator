@@ -141,6 +141,6 @@ func TestRemoteModeValidation(t *testing.T) {
   o:=base;mutate(&o)
   if err:=ValidateServe(o);err==nil {t.Fatalf("accepted unsafe remote options: %+v",o)}
  }
- base.Remote=true;base.Connectors=2
+ base.Remote=true;base.Connectors=2;base.RecoveryRoot="/private/recovery-test-only";base.RecoveryTenant="isolated-fixture"
  if err:=ValidateServe(base);err!=nil {t.Fatal(err)}
 }
