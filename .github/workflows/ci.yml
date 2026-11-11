@@ -154,8 +154,11 @@ jobs:
           GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go test -c -trimpath -o /tmp/r6c3b2-lab5/uidlab-linux-arm64.test ./internal/spike
           file /tmp/r6c3b2-lab5/uidlab-linux-arm64.test | grep -F 'ELF 64-bit'
           readelf -h /tmp/r6c3b2-lab5/uidlab-linux-arm64.test | grep -F 'AArch64'
-          go version -m /tmp/r6c3b2-lab5/uidlab-linux-arm64.test > /tmp/r6c3b2-lab5/provenance.txt
-          grep -Eq 'dep[[:space:]]+github.com/lorenzodonini/ocpp-go[[:space:]]+v0\.19\.0' /tmp/r6c3b2-lab5/provenance.txt
+          go version -m /tmp/r6c3b2-lab5/uidlab-linux-arm64.test | tee /tmp/r6c3b2-lab5/provenance.txt
+          # Go test executables may not embed dependency lines in go version -m.
+          # Verify the exact pinned dependency independently in the module graph.
+          go list -m -json github.com/lorenzodonini/ocpp-go > /tmp/r6c3b2-lab5/ocpp-go-module.json
+          jq -e '.Path == "github.com/lorenzodonini/ocpp-go" and .Version == "v0.19.0" and .Sum == "h1:THNriVV3bUWkGzaIkDeytcgoeBRjoN9ezPHsddIDfgc="' /tmp/r6c3b2-lab5/ocpp-go-module.json
           sha256sum /tmp/r6c3b2-lab5/uidlab-linux-arm64.test > /tmp/r6c3b2-lab5/SHA256SUMS
           printf 'checkout=%s\n' "$(git rev-parse HEAD)" > /tmp/r6c3b2-lab5/source-identity.txt
           printf 'event=%s\n' "$GITHUB_EVENT_NAME" >> /tmp/r6c3b2-lab5/source-identity.txt
