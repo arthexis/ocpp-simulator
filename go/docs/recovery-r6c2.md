@@ -85,3 +85,11 @@ Remaining work **R6C-3**, requiring separate authorization: the
 authoritative CSMS reconciliation/fencing contract and verified
 `CleanVerified` transition. This increment is **NO-GO** for Ready or
 deployment regardless of green offline CI.
+
+## R6C-3 design-only pre-acceptance
+
+The [read-only CSMS contract audit and proposed reconciliation/fencing
+specification](recovery-r6c3-design.md) distinguishes the existing CSMS
+SQLite evidence from a future authoritative, owner-fenced release snapshot.
+It does not implement new CSMS APIs, grant `CleanVerified`, replay any OCPP
+operation, or change the default `Quarantined` gate. **R6 remains NO-GO.**
