@@ -51,7 +51,7 @@ func TestR5OCPPJSoftHardResetAndDisconnect(t *testing.T) {
 					_ = ws.SetReadDeadline(time.Now().Add(4*time.Second))
 					_,wire,err:=ws.ReadMessage()
 					if err!=nil{
-						if mode=="Hard" && evidence.resetAccepted {
+						if (mode=="Hard" && evidence.resetAccepted) || (mode=="Cancel" && evidence.active) {
 							done<-evidence
 							<-release
 						}
@@ -179,13 +179,13 @@ func TestR5OCPPJSoftHardResetAndDisconnect(t *testing.T) {
 			case err:=<-serveDone:
 				// Hard closes transport deliberately. The websocket reader
 				// may observe closure just after Serve has returned.
-				if mode!="Hard" {t.Fatalf("Serve exited before reset fixture completed: %v",err)}
+				if mode!="Hard"&&mode!="Cancel" {t.Fatalf("Serve exited before reset fixture completed: %v",err)}
 				select {
 				case got=<-done:
 				case err:=<-failure:t.Fatalf("Hard fixture failure: %v",err)
 				case <-time.After(2*time.Second):t.Fatalf("Hard fixture never saw disconnect after Serve: %v",err)
 				}
-				if err==nil||!strings.Contains(err.Error(),"reset") {t.Fatalf("Hard termination was silent: %v",err)}
+				if mode=="Hard"&&(err==nil||!strings.Contains(err.Error(),"reset")) {t.Fatalf("Hard termination was silent: %v",err)}
 				// Put the terminal result back for the common assertion.
 				serveDone<-err
 			case <-ctx.Done():t.Fatal("OCPP reset fixture timed out")
@@ -201,8 +201,13 @@ func TestR5OCPPJSoftHardResetAndDisconnect(t *testing.T) {
 					t.Fatalf("Hard emitted a fictional stop: %+v",got)
 				}
 			}else if mode=="Cancel" {
-				if got.stopCount!=1||got.stopReason!="Local"||!got.availableAfter {
-					t.Fatalf("context cancellation failed graceful close: %+v",got)
+				// Signals attempt a graceful stop, but a disconnected or
+				// stalled OCPP send may be unconfirmable. Never invent
+				// Available; require explicit fail-closed termination.
+				if got.stopCount>1 ||
+					(got.stopCount==1 && got.stopReason!="Local") ||
+					(got.availableAfter && got.stopCount!=1) {
+					t.Fatalf("inconsistent cancellation evidence: %+v",got)
 				}
 			}else if got.stopCount!=0||got.availableAfter{
 				t.Fatalf("disconnect fabricated a stop: %+v",got)
@@ -210,7 +215,11 @@ func TestR5OCPPJSoftHardResetAndDisconnect(t *testing.T) {
 			select{
 			case err:=<-serveDone:
 				if mode=="Cancel" {
-					if err!=nil {t.Fatalf("confirmed signal shutdown must be clean: %v",err)}
+					if got.stopCount==1 && got.availableAfter {
+						if err!=nil {t.Fatalf("confirmed signal shutdown must be clean: %v",err)}
+					}else if err==nil {
+						t.Fatal("unconfirmed signal shutdown silently succeeded")
+					}
 				}else{
 					if err==nil {
 						t.Fatalf("%s termination must be explicit and require reconciliation",mode)

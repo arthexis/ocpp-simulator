@@ -140,7 +140,24 @@ func Serve(ctx context.Context, o ServeOptions) (resultErr error) {
 	if err := cp.Start(strings.TrimSuffix(o.URL, "/"+o.CP)); err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
-	defer cp.Stop()
+	defer func(){
+		if dispatcher==nil {
+			cp.Stop()
+			return
+		}
+		// Upstream OCPP stop waits for its dispatcher; a lost reply can
+		// leave this wait blocked. Never let a signal hang indefinitely.
+		done:=make(chan struct{})
+		go func(){cp.Stop();close(done)}()
+		select {
+		case <-done:
+		case <-time.After(2*time.Second):
+			fmt.Fprintln(os.Stderr,"{\"event\":\"ocpp_client_stop_timeout\",\"reconnect\":\"disabled\"}")
+			if resultErr==nil {
+				resultErr=fmt.Errorf("OCPP client stop timeout; manual reconciliation required")
+			}
+		}
+	}()
  if dispatcher != nil {
   // Worker shutdown precedes cp.Stop. Soft reset and signal exits allow a
   // bounded grace for confirmed closes; Hard never fabricates a close.
@@ -151,6 +168,16 @@ func Serve(ctx context.Context, o ServeOptions) (resultErr error) {
    case <-dispatcher.Done():
    case <-time.After(3*time.Second):
     timedOut=true
+    // Transport may have a response queue stuck behind an unreachable CSMS.
+    // Closing the local WebSocket is safer than falsely finishing a
+    // transaction. The outstanding ID stays in the ledger/evidence.
+    closed:=make(chan struct{})
+    go func(){client.Stop();close(closed)}()
+    select {
+    case <-closed:
+    case <-time.After(time.Second):
+      fmt.Fprintln(os.Stderr,"{\"event\":\"ocpp_transport_stop_timeout\",\"reconnect\":\"disabled\"}")
+    }
    }
    unresolved:=sessions.Unresolved()
    if timedOut || len(unresolved)>0 || sessions.ResetMode()!="" {
