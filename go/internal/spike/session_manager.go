@@ -13,6 +13,7 @@ type SessionState string
 const (
 	SessionAvailable SessionState = "Available"
 	SessionReserved  SessionState = "Reserved"
+	SessionStarting  SessionState = "Starting"
 	SessionCharging  SessionState = "Charging"
 	SessionStopping  SessionState = "Stopping"
 )
@@ -31,8 +32,8 @@ type managedSession struct {
 	cancel        context.CancelFunc
 }
 
-// SessionManager bounds local session state to the configured connector count.
-// R1 does not start any charging workers or accept remote commands.
+// SessionManager bounds ownership and transaction identity per connector.
+// A pending StartTransaction stays reserved until its response is known.
 type SessionManager struct {
 	mu         sync.Mutex
 	parent     context.Context
@@ -81,7 +82,6 @@ func (m *SessionManager) Snapshot(connector int) (SessionSnapshot, error) {
 }
 
 // Reserve atomically obtains the ledger reservation and a cancelable context.
-// It does not dispatch a charging task; that is reserved for R2.
 func (m *SessionManager) Reserve(connector int) (context.Context, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -102,24 +102,87 @@ func (m *SessionManager) Reserve(connector int) (context.Context, error) {
 	return ctx, nil
 }
 
+// ReserveAny selects the lowest available connector under the same lock as
+// the ledger reservation. Competing remote requests cannot choose the same slot.
+func (m *SessionManager) ReserveAny() (int, context.Context, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.parent.Err() != nil || m.announcing {
+		return 0, nil, fmt.Errorf("session manager not accepting reservations")
+	}
+	for connector := 1; connector < len(m.slots); connector++ {
+		if m.slots[connector].state != SessionAvailable {
+			continue
+		}
+		if err := m.ledger.Reserve(connector); err != nil {
+			return 0, nil, err
+		}
+		ctx, cancel := context.WithCancel(m.parent)
+		m.slots[connector] = managedSession{state: SessionReserved, ctx: ctx, cancel: cancel}
+		return connector, ctx, nil
+	}
+	return 0, nil, fmt.Errorf("all connectors occupied")
+}
+
+// BeginStart marks the window when the CSMS may allocate a real transaction.
+// Until its response arrives, cancellation must not drop this reservation.
+func (m *SessionManager) BeginStart(connector int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.parent.Err() != nil || !m.validConnector(connector) {
+		return fmt.Errorf("session manager closed or invalid connector")
+	}
+	slot := &m.slots[connector]
+	if slot.state != SessionReserved || slot.ctx.Err() != nil {
+		return fmt.Errorf("connector %d not ready to start", connector)
+	}
+	slot.state = SessionStarting
+	return nil
+}
+
+// FailStart releases a pending StartTransaction only after the CSMS has
+// explicitly rejected it or its request has failed without an accepted ID.
+// A transport timeout can be ambiguous and must be treated by the caller as
+// an unknown transaction rather than a successful closure.
+func (m *SessionManager) FailStart(connector int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.validConnector(connector) || m.slots[connector].state != SessionStarting {
+		return fmt.Errorf("connector %d has no pending start", connector)
+	}
+	m.slots[connector].cancel()
+	m.ledger.Abort(connector)
+	m.slots[connector] = managedSession{state: SessionAvailable}
+	return nil
+}
+
 // Start records a CSMS-issued transaction ID; it never fabricates one.
 func (m *SessionManager) Start(connector, transactionID int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.closed || m.parent.Err() != nil {
-		return fmt.Errorf("session manager closed")
+	if !m.validConnector(connector) {
+		return fmt.Errorf("invalid connector %d", connector)
 	}
-	if !m.validConnector(connector) || m.slots[connector].state != SessionReserved {
+	slot := &m.slots[connector]
+	if slot.state != SessionReserved && slot.state != SessionStarting {
 		return fmt.Errorf("connector %d has no pending reservation", connector)
 	}
-	if m.slots[connector].ctx.Err() != nil {
+	// Preserve backwards compatibility with direct Reserve→Start callers, but
+	// allow an in-flight BeginStart to record late CSMS acknowledgement even
+	// if shutdown canceled its context.
+	if slot.state == SessionReserved && (m.closed || m.parent.Err() != nil || slot.ctx.Err() != nil) {
 		return fmt.Errorf("connector %d reservation canceled", connector)
 	}
 	if err := m.ledger.Start(connector, transactionID); err != nil {
 		return err
 	}
-	m.slots[connector].state = SessionCharging
-	m.slots[connector].transactionID = transactionID
+	if m.closed || m.parent.Err() != nil || slot.ctx.Err() != nil {
+		slot.state = SessionStopping
+		slot.cancel()
+	} else {
+		slot.state = SessionCharging
+	}
+	slot.transactionID = transactionID
 	return nil
 }
 
@@ -150,6 +213,8 @@ func (m *SessionManager) RequestStop(connector int) error {
 		slot.cancel()
 		m.ledger.Abort(connector)
 		*slot = managedSession{state: SessionAvailable}
+	case SessionStarting:
+		slot.cancel() // keep reservation until StartTransaction result
 	case SessionCharging:
 		slot.state = SessionStopping
 		slot.cancel()
@@ -248,6 +313,8 @@ func (m *SessionManager) Close() {
 			slot.cancel()
 			m.ledger.Abort(connector)
 			*slot = managedSession{state: SessionAvailable}
+		case SessionStarting:
+			slot.cancel() // in-flight start response still owns reservation
 		case SessionCharging:
 			slot.state = SessionStopping
 			slot.cancel()

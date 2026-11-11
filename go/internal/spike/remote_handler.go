@@ -12,13 +12,18 @@ import (
 // remain rejected until transaction lifecycle dispatch is connected.
 type RemoteHandler struct {
  Ledger *ConnectorLedger
+ StartRemote func(*core.RemoteStartTransactionRequest) bool
  mu sync.Mutex
  heartbeat int
  heartbeatUpdates chan int
 }
 var _ core.ChargePointHandler = (*RemoteHandler)(nil)
-func (h *RemoteHandler) OnRemoteStartTransaction(_ *core.RemoteStartTransactionRequest)(*core.RemoteStartTransactionConfirmation,error){
- return core.NewRemoteStartTransactionConfirmation(types.RemoteStartStopStatusRejected),nil
+func (h *RemoteHandler) OnRemoteStartTransaction(request *core.RemoteStartTransactionRequest)(*core.RemoteStartTransactionConfirmation,error){
+ status := types.RemoteStartStopStatusRejected
+ if h.StartRemote != nil && h.StartRemote(request) {
+  status = types.RemoteStartStopStatusAccepted
+ }
+ return core.NewRemoteStartTransactionConfirmation(status),nil
 }
 func (h *RemoteHandler) OnRemoteStopTransaction(_ *core.RemoteStopTransactionRequest)(*core.RemoteStopTransactionConfirmation,error){
  return core.NewRemoteStopTransactionConfirmation(types.RemoteStartStopStatusRejected),nil

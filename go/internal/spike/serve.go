@@ -23,6 +23,9 @@ type ServeOptions struct {
 	Charge *ChargeOptions
  Remote bool
  Connectors int
+ RemotePowerKW float64
+ RemoteDuration time.Duration
+ RemoteMeterInterval time.Duration
 }
 
 var cpName = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
@@ -53,7 +56,10 @@ func ValidateServe(o ServeOptions) error {
 		return fmt.Errorf("--connect-timeout must be between 0 and 120 seconds")
 	}
 	if o.Charge != nil { if err := o.Charge.Validate(); err != nil { return err } }
- if o.Remote { if _,err:=NewConnectorLedger(o.Connectors);err!=nil {return err} } else if o.Connectors!=0 {return fmt.Errorf("--connectors requires --remote")}
+ if o.Remote {
+  if _,err:=NewConnectorLedger(o.Connectors);err!=nil {return err}
+  if _,err:=(RemoteChargeSettings{PowerKW:o.RemotePowerKW,Duration:o.RemoteDuration,MeterInterval:o.RemoteMeterInterval}).normalized();err!=nil{return err}
+ } else if o.Connectors!=0 {return fmt.Errorf("--connectors requires --remote")}
  if o.Charge!=nil && o.Remote {return fmt.Errorf("one-shot --connector and --remote are mutually exclusive")}
 	return nil
 }
@@ -99,12 +105,21 @@ func Serve(ctx context.Context, o ServeOptions) error {
  var heartbeatUpdates chan int
  var remoteHandler *RemoteHandler
  var sessions *SessionManager
+ var dispatcher *RemoteStartDispatcher
  if o.Remote {
   sessions, err = NewSessionManager(ctx, o.Connectors)
   if err != nil { return err }
   defer sessions.Close()
+  dispatcher, err = NewRemoteStartDispatcher(sessions, cp, RemoteChargeSettings{
+   PowerKW:o.RemotePowerKW, Duration:o.RemoteDuration, MeterInterval:o.RemoteMeterInterval,
+  })
+  if err != nil { return err }
   heartbeatUpdates = make(chan int, 1)
-  remoteHandler = &RemoteHandler{Ledger: sessions.ledger, heartbeatUpdates: heartbeatUpdates}
+  remoteHandler = &RemoteHandler{
+   Ledger: sessions.ledger,
+   StartRemote: dispatcher.TryStart,
+   heartbeatUpdates: heartbeatUpdates,
+  }
   cp.SetCoreHandler(remoteHandler)
  }
 	// ocpp-go's API accepts a base URL and appends /<chargePointID>.
@@ -112,6 +127,18 @@ func Serve(ctx context.Context, o ServeOptions) error {
 		return fmt.Errorf("connect: %w", err)
 	}
 	defer cp.Stop()
+ if dispatcher != nil {
+  // The worker shutdown runs before cp.Stop (LIFO defer order).
+  // Bounded waiting lets in-flight StopTransaction finish when connected.
+  defer func() {
+   dispatcher.Close()
+   select {
+   case <-dispatcher.Done():
+   case <-time.After(3*time.Second):
+    fmt.Fprintln(os.Stderr,"remote worker shutdown timed out; unconfirmed transactions remain in local evidence")
+   }
+  }()
+ }
 	fmt.Println("WebSocket: connected (ocpp1.6)")
 	type bootResult struct {
 		interval int
@@ -143,11 +170,18 @@ func Serve(ctx context.Context, o ServeOptions) error {
   }); err != nil {
    return fmt.Errorf("initial remote connector status: %w", err)
   }
+  if err := dispatcher.Enable(); err != nil {
+   return fmt.Errorf("enable remote starts: %w",err)
+  }
  }
 	if remoteHandler!=nil {remoteHandler.mu.Lock();remoteHandler.heartbeat=interval;remoteHandler.mu.Unlock()}
  ticker := time.NewTicker(time.Duration(interval)*time.Second)
 	defer ticker.Stop()
 	var chargingDone <-chan error
+ var remoteErrors <-chan error
+ if dispatcher != nil {
+  remoteErrors = dispatcher.Errors()
+ }
 	if o.Charge != nil {
 		finished := make(chan error,1)
 		chargingDone = finished
@@ -166,6 +200,8 @@ func Serve(ctx context.Context, o ServeOptions) error {
 			return nil
 		case err := <-client.Disconnected(): return fmt.Errorf("CSMS disconnected: %w", err)
 		case err := <-chargingDone: return err
+        case remoteErr := <-remoteErrors:
+         fmt.Fprintf(os.Stderr,"remote session: %v\n",remoteErr)
 		case updated:=<-heartbeatUpdates:
             ticker.Reset(time.Duration(updated)*time.Second)
         case <-ticker.C:
