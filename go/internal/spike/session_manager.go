@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+ "time"
 
 	"github.com/lorenzodonini/ocpp-go/ocpp1.6/core"
 )
@@ -32,6 +33,7 @@ type managedSession struct {
 	transactionID int
 	remoteStop    bool
 	stopIssued    bool
+ attemptID string
 	ctx           context.Context
 	cancel        context.CancelFunc
 }
@@ -42,6 +44,7 @@ type SessionManager struct {
 	mu         sync.Mutex
 	parent     context.Context
 	ledger     *ConnectorLedger
+ journal RecoveryJournal
 	slots      []managedSession // connector IDs start at 1; slot 0 is unused
 	closed     bool
 	resetMode  core.ResetType
@@ -72,6 +75,21 @@ func NewSessionManager(parent context.Context, connectors int) (*SessionManager,
 	return m, nil
 }
 
+// The journal is bound only within this Go package's offline recovery tests.
+// Production Serve still refuses every remote connection without CSMS authority.
+func newSessionManagerWithRecovery(parent context.Context,connectors int,journal RecoveryJournal)(*SessionManager,error){
+ if journal==nil{return nil,fmt.Errorf("journal required")}
+ m,err:=NewSessionManager(parent,connectors)
+ if err!=nil{return nil,err}
+ m.mu.Lock();m.journal=journal;m.mu.Unlock()
+ return m,nil
+}
+func (m *SessionManager) persist(fn func(context.Context)error)error{
+ if m.journal==nil{return nil}
+ ctx,cancel:=context.WithTimeout(context.Background(),3*time.Second)
+ defer cancel()
+ return fn(ctx)
+}
 func (m *SessionManager) validConnector(connector int) bool {
 	return connector > 0 && connector < len(m.slots)
 }
@@ -99,11 +117,13 @@ func (m *SessionManager) Reserve(connector int) (context.Context, error) {
 	if m.slots[connector].state != SessionAvailable {
 		return nil, fmt.Errorf("connector %d is %s", connector, m.slots[connector].state)
 	}
-	if err := m.ledger.Reserve(connector); err != nil {
-		return nil, err
-	}
-	ctx, cancel := context.WithCancel(m.parent)
-	m.slots[connector] = managedSession{state: SessionReserved, ctx: ctx, cancel: cancel}
+	if err := m.ledger.Reserve(connector); err != nil {return nil,err}
+ var attempt string
+ if err:=m.persist(func(ctx context.Context)error{
+  var e error;attempt,e=m.journal.ReserveIntent(ctx,connector);return e
+ });err!=nil{m.ledger.Abort(connector);return nil,fmt.Errorf("durable reservation: %w",err)}
+ ctx,cancel:=context.WithCancel(m.parent)
+ m.slots[connector]=managedSession{state:SessionReserved,ctx:ctx,cancel:cancel,attemptID:attempt}
 	return ctx, nil
 }
 
@@ -119,11 +139,13 @@ func (m *SessionManager) ReserveAny() (int, context.Context, error) {
 		if m.slots[connector].state != SessionAvailable {
 			continue
 		}
-		if err := m.ledger.Reserve(connector); err != nil {
-			return 0, nil, err
-		}
-		ctx, cancel := context.WithCancel(m.parent)
-		m.slots[connector] = managedSession{state: SessionReserved, ctx: ctx, cancel: cancel}
+		if err:=m.ledger.Reserve(connector);err!=nil{return 0,nil,err}
+  var attempt string
+  if err:=m.persist(func(ctx context.Context)error{
+   var e error;attempt,e=m.journal.ReserveIntent(ctx,connector);return e
+  });err!=nil{m.ledger.Abort(connector);return 0,nil,fmt.Errorf("durable reservation: %w",err)}
+  ctx,cancel:=context.WithCancel(m.parent)
+  m.slots[connector]=managedSession{state:SessionReserved,ctx:ctx,cancel:cancel,attemptID:attempt}
 		return connector, ctx, nil
 	}
 	return 0, nil, fmt.Errorf("all connectors occupied")
@@ -141,8 +163,11 @@ func (m *SessionManager) BeginStart(connector int) error {
 	if slot.state != SessionReserved || slot.ctx.Err() != nil {
 		return fmt.Errorf("connector %d not ready to start", connector)
 	}
-	slot.state = SessionStarting
-	return nil
+	if err:=m.persist(func(ctx context.Context)error{return m.journal.StartIntent(ctx,slot.attemptID,connector)});err!=nil{
+  return fmt.Errorf("durable start intent: %w",err)
+ }
+ slot.state=SessionStarting
+ return nil
 }
 
 // FailStart releases a pending StartTransaction only after the CSMS has
@@ -152,10 +177,12 @@ func (m *SessionManager) BeginStart(connector int) error {
 func (m *SessionManager) FailStart(connector int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.validConnector(connector) || m.slots[connector].state != SessionStarting {
-		return fmt.Errorf("connector %d has no pending start", connector)
-	}
-	m.slots[connector].cancel()
+	if !m.validConnector(connector)||m.slots[connector].state!=SessionStarting{return fmt.Errorf("connector %d has no pending start",connector)}
+ slot:=&m.slots[connector]
+ if err:=m.persist(func(ctx context.Context)error{return m.journal.StartRejected(ctx,slot.attemptID,connector)});err!=nil{
+  return fmt.Errorf("durable start rejected: %w",err)
+ }
+ slot.cancel()
 	m.ledger.Abort(connector)
 	m.slots[connector] = managedSession{state: SessionAvailable}
 	return nil
@@ -178,10 +205,13 @@ func (m *SessionManager) Start(connector, transactionID int) error {
 	if slot.state == SessionReserved && (m.closed || m.parent.Err() != nil || slot.ctx.Err() != nil) {
 		return fmt.Errorf("connector %d reservation canceled", connector)
 	}
-	if err := m.ledger.Start(connector, transactionID); err != nil {
-		return err
-	}
-	if m.closed || m.parent.Err() != nil || slot.ctx.Err() != nil {
+	if transactionID<=0{return fmt.Errorf("CSMS ID must be positive")}
+ if owner,ok:=m.ledger.ConnectorFor(transactionID);ok&&owner!=connector{return fmt.Errorf("duplicate CSMS ID")}
+ if err:=m.persist(func(ctx context.Context)error{return m.journal.StartConfirmed(ctx,slot.attemptID,connector,transactionID)});err!=nil{
+  return fmt.Errorf("durable CSMS start ACK: %w",err)
+ }
+ if err:=m.ledger.Start(connector,transactionID);err!=nil{return err}
+ if m.closed||m.parent.Err()!=nil||slot.ctx.Err()!=nil {
 		slot.state = SessionStopping
 		slot.cancel()
 	} else {
@@ -195,10 +225,12 @@ func (m *SessionManager) Start(connector, transactionID int) error {
 func (m *SessionManager) Abort(connector int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.validConnector(connector) || m.slots[connector].state != SessionReserved {
-		return fmt.Errorf("connector %d has no abortable reservation", connector)
-	}
-	m.slots[connector].cancel()
+	if !m.validConnector(connector)||m.slots[connector].state!=SessionReserved{return fmt.Errorf("connector %d has no abortable reservation",connector)}
+ slot:=&m.slots[connector]
+ if err:=m.persist(func(ctx context.Context)error{return m.journal.AbortIntent(ctx,slot.attemptID,connector)});err!=nil{
+  return fmt.Errorf("durable reservation abort: %w",err)
+ }
+ slot.cancel()
 	m.ledger.Abort(connector)
 	m.slots[connector] = managedSession{state: SessionAvailable}
 	return nil
@@ -252,10 +284,11 @@ func (m *SessionManager) RequestRemoteStop(transactionID int) (int, error) {
 	if slot.remoteStop && slot.state == SessionStopping {
 		return connector, nil
 	}
-	if slot.state != SessionCharging || slot.stopIssued {
-		return 0, fmt.Errorf("transaction %d no longer accepting remote stop", transactionID)
-	}
-	slot.remoteStop = true
+	if slot.state!=SessionCharging||slot.stopIssued{return 0,fmt.Errorf("transaction %d no longer accepting remote stop",transactionID)}
+ if err:=m.persist(func(ctx context.Context)error{return m.journal.RequestRemoteStopIntent(ctx,slot.attemptID,connector,transactionID)});err!=nil{
+  return 0,fmt.Errorf("durable RemoteStop request: %w",err)
+ }
+ slot.remoteStop=true
 	slot.state = SessionStopping
 	slot.cancel()
 	return connector, nil
@@ -265,7 +298,10 @@ func (m *SessionManager) RequestRemoteStop(transactionID int) (int, error) {
 // reason under the session lock. Hard reset prohibits new OCPP stop calls;
 // Soft reset uses the OCPP SoftReset reason unless a RemoteStop was already
 // accepted. A previously claimed reason never changes.
-func (m *SessionManager) BeginStopReason(connector, transactionID int) (core.Reason, error) {
+func(m *SessionManager) BeginStopReason(connector,transactionID int)(core.Reason,error){
+ return m.BeginStopReasonWithMeter(connector,transactionID,0)
+}
+func (m *SessionManager) BeginStopReasonWithMeter(connector, transactionID,meterWh int)(core.Reason,error){
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.validConnector(connector) || transactionID <= 0 {
@@ -284,9 +320,12 @@ func (m *SessionManager) BeginStopReason(connector, transactionID int) (core.Rea
 	} else if m.resetMode == core.ResetTypeSoft {
 		reason = core.ReasonSoftReset
 	}
-	slot.state = SessionStopping
-	slot.stopIssued = true
-	return reason, nil
+	if err:=m.persist(func(ctx context.Context)error{return m.journal.StopIntent(ctx,slot.attemptID,connector,transactionID,reason,meterWh)});err!=nil{
+  return "",fmt.Errorf("durable StopTransaction intent: %w",err)
+ }
+ slot.state=SessionStopping
+ slot.stopIssued=true
+ return reason,nil
 }
 
 // BeginStop remains compatible with R3's boolean remote-reason contract.
@@ -326,6 +365,46 @@ func (m *SessionManager) Unresolved() []SessionSnapshot {
 	return unresolved
 }
 
+// Commit the initial connector battery state before RemoteStart Accepted.
+func(m *SessionManager) InitializeBattery(connector int,battery RecoveryBattery)error{
+ m.mu.Lock();defer m.mu.Unlock()
+ if !m.validConnector(connector){return fmt.Errorf("invalid battery connector")}
+ slot:=&m.slots[connector]
+ if slot.state!=SessionReserved{return fmt.Errorf("battery not reserved")}
+ if err:=m.persist(func(ctx context.Context)error{return m.journal.BatteryInitialized(ctx,slot.attemptID,connector,battery)});err!=nil{return fmt.Errorf("durable initial battery: %w",err)}
+ return nil
+}
+// Commit the new meter/seed/SoC before sending MeterValues.
+func(m *SessionManager) RecordMeterIntent(connector,txID,meterWh,watts int,battery RecoveryBattery)error{
+ m.mu.Lock();defer m.mu.Unlock()
+ if !m.validConnector(connector){return fmt.Errorf("invalid meter connector")}
+ slot:=&m.slots[connector]
+ if slot.transactionID!=txID||(slot.state!=SessionCharging&&slot.state!=SessionStopping)||slot.stopIssued{return fmt.Errorf("meter transaction owner invalid")}
+ if err:=m.persist(func(ctx context.Context)error{return m.journal.MeterIntent(ctx,slot.attemptID,connector,txID,meterWh,watts,battery)});err!=nil{
+  return fmt.Errorf("durable meter intent: %w",err)
+ }
+ return nil
+}
+// Persist the MeterValues ACK before consuming another simulated interval.
+func(m *SessionManager) RecordMeterConfirmation(connector,txID int)error{
+ m.mu.Lock();defer m.mu.Unlock()
+ if !m.validConnector(connector){return fmt.Errorf("invalid meter connector")}
+ slot:=&m.slots[connector]
+ if slot.transactionID!=txID{return fmt.Errorf("meter ACK owner mismatch")}
+ if err:=m.persist(func(ctx context.Context)error{return m.journal.MeterConfirmed(ctx,slot.attemptID,connector,txID)});err!=nil{return fmt.Errorf("durable meter ACK: %w",err)}
+ return nil
+}
+// Called after the CSMS's StopTransaction ACK and before Available.
+func(m *SessionManager) RecordStopConfirmation(connector,txID int)error{
+ m.mu.Lock();defer m.mu.Unlock()
+ if !m.validConnector(connector){return fmt.Errorf("invalid stop connector")}
+ slot:=&m.slots[connector]
+ if slot.transactionID!=txID||!slot.stopIssued{return fmt.Errorf("stop not claimed")}
+ if err:=m.persist(func(ctx context.Context)error{return m.journal.StopConfirmed(ctx,slot.attemptID,connector,txID)});err!=nil{
+  return fmt.Errorf("durable StopTransaction ACK: %w",err)
+ }
+ return nil
+}
 // Finish must be called only after confirmed transaction closure. It remains
 // possible after Close so a late verified StopTransaction can clear the ledger.
 func (m *SessionManager) Finish(connector, transactionID int) error {
@@ -335,10 +414,13 @@ func (m *SessionManager) Finish(connector, transactionID int) error {
 		(m.slots[connector].state != SessionCharging && m.slots[connector].state != SessionStopping) {
 		return fmt.Errorf("connector %d has no started transaction", connector)
 	}
-	if err := m.ledger.Finish(connector, transactionID); err != nil {
-		return err
-	}
-	m.slots[connector].cancel()
+	slot:=&m.slots[connector]
+ if slot.transactionID!=transactionID{return fmt.Errorf("wrong finish transaction")}
+ if err:=m.persist(func(ctx context.Context)error{return m.journal.FinishConfirmed(ctx,slot.attemptID,connector,transactionID)});err!=nil{
+  return fmt.Errorf("durable close: %w",err)
+ }
+ if err:=m.ledger.Finish(connector,transactionID);err!=nil{return err}
+ slot.cancel()
 	m.slots[connector] = managedSession{state: SessionAvailable}
 	return nil
 }

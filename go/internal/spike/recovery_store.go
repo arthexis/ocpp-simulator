@@ -23,7 +23,7 @@ import (
 // created locally and no saved DB state grants permission to start charging.
 var ErrRecoveryQuarantined = errors.New("recovery is quarantined: authoritative CSMS reconciliation is required")
 
-const recoverySchemaVersion = 1
+const recoverySchemaVersion = 2
 
 type RecoveryIdentity struct {
 	Tenant     string
@@ -244,7 +244,39 @@ func openSQLiteRecoveryStore(root string, identity RecoveryIdentity, syncFn func
 			(singleton,identity_hash,tenant,csms,cp,connectors,generation,trust_state)
 			VALUES(1,?,?,?,?,?,0+1,'Quarantined')`,
 			key, identity.Tenant, identity.CSMS, identity.CP, identity.Connectors); err != nil { return nil, err }
-		if _, err = tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d",recoverySchemaVersion)); err != nil { return nil, err }
+	}
+	// Upgrade only the private Go recovery database, never ocpp-csms SQLite.
+	// Existing R6C-1 uncertainty remains in recovery_pending, quarantined.
+	if version < 2 {
+		if _, err = tx.ExecContext(ctx, `CREATE TABLE recovery_attempts(
+			attempt_id TEXT PRIMARY KEY,
+			connector INTEGER NOT NULL CHECK(connector BETWEEN 1 AND 128),
+			generation INTEGER NOT NULL CHECK(generation>0),
+			phase TEXT NOT NULL,
+			transaction_id INTEGER NOT NULL DEFAULT 0 CHECK(transaction_id>=0),
+			stop_reason TEXT NOT NULL DEFAULT '',
+			meter_wh INTEGER NOT NULL DEFAULT 0 CHECK(meter_wh>=0),
+			power_w INTEGER NOT NULL DEFAULT 0 CHECK(power_w>=0),
+			capacity_wh REAL NOT NULL DEFAULT 0,
+			energy_wh REAL NOT NULL DEFAULT 0,
+			rng_seed TEXT NOT NULL DEFAULT '0',
+			rng_drift REAL NOT NULL DEFAULT 0)`); err != nil { return nil,err }
+		if _,err=tx.ExecContext(ctx,`CREATE UNIQUE INDEX active_connector_owner ON recovery_attempts(connector)
+		  WHERE phase NOT IN ('Aborted','StartRejected','Closed')`);err!=nil{return nil,err}
+		if _,err=tx.ExecContext(ctx,`CREATE UNIQUE INDEX active_transaction_owner ON recovery_attempts(transaction_id)
+		  WHERE transaction_id>0 AND phase NOT IN ('Aborted','StartRejected','Closed')`);err!=nil{return nil,err}
+		if _,err=tx.ExecContext(ctx,`CREATE TABLE recovery_events(
+		  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+		  attempt_id TEXT NOT NULL REFERENCES recovery_attempts(attempt_id),
+		  phase TEXT NOT NULL,
+		  transaction_id INTEGER NOT NULL,
+		  meter_wh INTEGER NOT NULL,
+		  stop_reason TEXT NOT NULL,
+		  capacity_wh REAL NOT NULL,
+		  energy_wh REAL NOT NULL,
+		  rng_seed TEXT NOT NULL,
+		  rng_drift REAL NOT NULL)`);err!=nil{return nil,err}
+		if _,err=tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d",recoverySchemaVersion));err!=nil{return nil,err}
 	}
 	var storedHash, tenant, endpoint, cp, trust string
 	var connectors int

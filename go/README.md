@@ -133,3 +133,17 @@ reconciliation service exists, **actual Go remote mode currently refuses all
 connections, even to an empty CSMS**. The R1–R5 loopback integration tests
 use a test-binary-only fixture path; this is not a production bypass.
 See [R6C-1 details](docs/recovery-r6c1.md). Python remains the default.
+
+## R6C-2 transactional recovery (offline)
+
+The experimental Go backend has a durable private SQLite attempt/outbox ledger
+for reservations, StartTransaction, MeterValues, RemoteStop, StopTransaction
+and their observed acknowledgements, with connector ownership, generation
+and battery RNG/SoC snapshots. See
+[R6C-2 implementation limits](docs/recovery-r6c2.md).
+
+**It remains fully quarantined in the normal executable.** The journal does
+not grant CSMS reconciliation authority, permit replay or prove that an
+unknown OCPP command was executed. Automatic restart, Ready, merge and
+production access remain prohibited until an independently approved R6C-3
+reconciliation/fencing contract is implemented and accepted.

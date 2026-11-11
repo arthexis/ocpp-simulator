@@ -125,13 +125,15 @@ func Serve(ctx context.Context, o ServeOptions) (resultErr error) {
 	if err := ValidateServe(o); err != nil {
 		return err
 	}
+ var recoveryStore *SQLiteRecoveryStore
 	if o.Remote && !o.testOnlyLoopback {
 		identity:=RecoveryIdentity{Tenant:o.RecoveryTenant,CSMS:o.URL,CP:o.CP,Connectors:o.Connectors}
 		store,err:=OpenSQLiteRecoveryStore(o.RecoveryRoot,identity)
 		if err!=nil {return fmt.Errorf("remote recovery store: %w",err)}
+  recoveryStore=store
 		defer store.Close()
-		// Startup does not reach even BootNotification until a trusted CSMS
-		// reconciliation mechanism is separately implemented and approved.
+		// This gate ALWAYS rejects in R6C-2. No authoritative CSMS witness
+  // exists; even a valid and empty SQLite DB is NOT CleanVerified.
 		if err:=store.BeforeAvailable(ctx);err!=nil {
 			return fmt.Errorf("remote startup gate: %w",err)
 		}
@@ -152,8 +154,12 @@ func Serve(ctx context.Context, o ServeOptions) (resultErr error) {
  var sessions *SessionManager
  var dispatcher *RemoteStartDispatcher
  if o.Remote {
-  sessions, err = NewSessionManager(ctx, o.Connectors)
-  if err != nil { return err }
+  if recoveryStore!=nil {
+   sessions,err=newSessionManagerWithRecovery(ctx,o.Connectors,recoveryStore)
+  }else{
+   sessions,err=NewSessionManager(ctx,o.Connectors)
+  }
+  if err!=nil{return err}
   defer sessions.Close()
   dispatcher, err = NewRemoteStartDispatcher(sessions, cp, RemoteChargeSettings{
    PowerKW:o.RemotePowerKW, Duration:o.RemoteDuration, MeterInterval:o.RemoteMeterInterval,

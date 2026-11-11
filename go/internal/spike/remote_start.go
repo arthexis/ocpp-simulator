@@ -236,10 +236,13 @@ func (d *RemoteStartDispatcher) TryStart(request *core.RemoteStartTransactionReq
 	} else {
 		connector, ctx, err = d.sessions.ReserveAny()
 	}
-	if err != nil {
-		return false
-	}
-	job := remoteStartJob{connector: connector, rfid: request.IdTag, ctx: ctx}
+	if err != nil {return false}
+ // Before emitting Accepted, freeze battery SoC/seed together with the
+ // connector's durable reservation. An uncertain write cannot dispatch.
+ if battery:=d.batteryFor(connector);battery!=nil {
+  if err:=d.sessions.InitializeBattery(connector,snapshotBattery(battery));err!=nil{return false}
+ }
+ job := remoteStartJob{connector: connector, rfid: request.IdTag, ctx: ctx}
 	select {
 	case d.jobs <- job:
 		return true
@@ -478,31 +481,42 @@ func runRemoteCharge(ctx context.Context, cp ChargePoint, sessions *SessionManag
 		if ctx.Err() != nil { break }
 		elapsed += step
 		var samples []types.SampledValue
+  var meterWatts int
 		if battery != nil {
 			wh, watts, soc, err := battery.advance(opts.PowerKW, step, initialBatteryWh)
 			if err != nil {
 				_ = sessions.RequestStop(opts.Connector)
 				return fmt.Errorf("battery meter invalid; transaction %d may remain open: %w", txID, err)
 			}
-			meterWh = wh
+			meterWh=wh
+   meterWatts=watts
 			samples = []types.SampledValue{
 				{Value: fmt.Sprintf("%d", wh), Measurand: types.MeasurandEnergyActiveImportRegister, Unit: types.UnitOfMeasureWh},
 				{Value: fmt.Sprintf("%d", watts), Measurand: types.MeasurandPowerActiveImport, Unit: types.UnitOfMeasureW},
 				{Value: fmt.Sprintf("%.2f", soc), Measurand: types.MeasurandSoC, Unit: types.UnitOfMeasurePercent},
 			}
 		} else {
-			meterWh = EnergyWh(opts.PowerKW, elapsed)
+			meterWh=EnergyWh(opts.PowerKW,elapsed)
+   meterWatts=int(math.RoundToEven(opts.PowerKW*1000))
 			samples = []types.SampledValue{{Value:fmt.Sprintf("%d", meterWh), Measurand:types.MeasurandEnergyActiveImportRegister, Unit:types.UnitOfMeasureWh}}
 		}
-		values := []types.MeterValue{{Timestamp:types.Now(), SampledValue:samples}}
-		if sessions.IsHardReset() { return fmt.Errorf("hard reset interrupted transaction %d before MeterValues", txID) }
-		if _, err := cp.MeterValues(opts.Connector, values, func(r *core.MeterValuesRequest) { r.TransactionId = &txID }); err != nil {
-			_ = sessions.RequestStop(opts.Connector)
-			return fmt.Errorf("MeterValues unconfirmed; transaction %d may remain open: %w", txID, err)
-		}
+		values:=[]types.MeterValue{{Timestamp:types.Now(),SampledValue:samples}}
+  if sessions.IsHardReset(){return fmt.Errorf("hard reset before MeterValues on %d",txID)}
+  if err:=sessions.RecordMeterIntent(opts.Connector,txID,meterWh,meterWatts,snapshotBattery(battery));err!=nil{
+   return fmt.Errorf("MeterValues not sent; durable intent failed: %w",err)
+  }
+  if sessions.IsHardReset(){return fmt.Errorf("hard reset after durable MeterValues intent on %d",txID)}
+  if ctx.Err()!=nil{break} // do not send after an accepted RemoteStop
+  if _,err:=cp.MeterValues(opts.Connector,values,func(r *core.MeterValuesRequest){r.TransactionId=&txID});err!=nil{
+   _=sessions.RequestStop(opts.Connector)
+   return fmt.Errorf("MeterValues unconfirmed; transaction %d may remain open: %w",txID,err)
+  }
+  if err:=sessions.RecordMeterConfirmation(opts.Connector,txID);err!=nil{
+   return fmt.Errorf("MeterValues ACK not durable; transaction %d remains uncertain: %w",txID,err)
+  }
 	}
 	if sessions.IsHardReset() { return fmt.Errorf("hard reset forbids StopTransaction on %d", txID) }
-	reason, err := sessions.BeginStopReason(opts.Connector, txID)
+	reason, err := sessions.BeginStopReasonWithMeter(opts.Connector, txID,meterWh)
 	if err != nil {
 		// No StopTransaction has been sent. Do not claim completion.
 		return fmt.Errorf("cannot claim StopTransaction %d: %w", txID, err)
@@ -514,9 +528,10 @@ func runRemoteCharge(ctx context.Context, cp ChargePoint, sessions *SessionManag
 	if err != nil {
 		return fmt.Errorf("StopTransaction unconfirmed; transaction %d may remain open: %w", txID, err)
 	}
-	if confirmation == nil {
-		return fmt.Errorf("StopTransaction missing confirmation; transaction %d may remain open", txID)
-	}
+	if confirmation == nil {return fmt.Errorf("StopTransaction missing confirmation; transaction %d may remain open",txID)}
+ if err:=sessions.RecordStopConfirmation(opts.Connector,txID);err!=nil{
+  return fmt.Errorf("StopTransaction ACK not durable; retain transaction %d: %w",txID,err)
+ }
 	if sessions.IsHardReset() {
 		return fmt.Errorf("hard reset after StopTransaction response; do not announce Available for %d", txID)
 	}
