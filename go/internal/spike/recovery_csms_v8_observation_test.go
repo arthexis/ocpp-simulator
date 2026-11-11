@@ -62,7 +62,7 @@ func fixtureStop(t *testing.T, db *sql.DB, cp string, id int64) {
 	t.Helper()
 	payload := fmt.Sprintf("{\"transaction_id\":%d,\"meter_stop\":42,\"timestamp\":\"2026-11-11T10:00:00Z\"}", id)
 	execCSMSFixture(t, db, "INSERT INTO events(received_at,charger_id,action,direction,transaction_id,payload_json) VALUES(?,?,'StopTransaction','in',?,?)", fixtureTime, cp, id, payload)
-	execCSMSFixture(t, db, "UPDATE transactions SET state='stopped',stop_received_at=? WHERE transaction_id=? AND charger_id=?", fixtureTime, id, cp)
+	execCSMSFixture(t, db, "UPDATE transactions SET state='stopped',stop_received_at=?,meter_stop=42,stopped_at='2026-11-11T10:00:00Z' WHERE transaction_id=? AND charger_id=?", fixtureTime, id, cp)
 }
 
 func assertAlwaysQuarantined(t *testing.T, obs csmsV8Observation) {
@@ -161,6 +161,30 @@ func TestR6C3ANegativeEvidenceNeverGrantsCleanVerified(t *testing.T) {
 		assertAlwaysQuarantined(t, obs)
 		r := obs.Connectors[0].Transactions[0]
 		if r.StopReceipt == nil || r.DuplicateStops != 1 { t.Fatalf("duplicate destroyed first receipt: %+v", r) }
+	})
+	t.Run("open row with matching stop event timestamp is not a receipt", func(t *testing.T) {
+		writer, reader := csmsFixture(t)
+		fixtureStart(t, writer, "CP-A", 1, 101, "{\"connector_id\":1}")
+		fixtureStop(t, writer, "CP-A", 101)
+		execCSMSFixture(t, writer, "UPDATE transactions SET state='open' WHERE transaction_id=101")
+		obs, err := observeCSMSV8Fixture(context.Background(), reader, "CP-A", "source-A", 1)
+		if err != nil { t.Fatal(err) }
+		assertAlwaysQuarantined(t, obs)
+		if obs.Connectors[0].Transactions[0].StopReceipt != nil || len(obs.Conflicts) == 0 {
+			t.Fatalf("open row falsely certified by matching stop event: %+v", obs)
+		}
+	})
+	t.Run("same stop timestamp but wrong meter is not a receipt", func(t *testing.T) {
+		writer, reader := csmsFixture(t)
+		fixtureStart(t, writer, "CP-A", 1, 101, "{\"connector_id\":1}")
+		fixtureStop(t, writer, "CP-A", 101)
+		execCSMSFixture(t, writer, "UPDATE transactions SET meter_stop=43 WHERE transaction_id=101")
+		obs, err := observeCSMSV8Fixture(context.Background(), reader, "CP-A", "source-A", 1)
+		if err != nil { t.Fatal(err) }
+		assertAlwaysQuarantined(t, obs)
+		if obs.Connectors[0].Transactions[0].StopReceipt != nil || len(obs.Conflicts) == 0 {
+			t.Fatalf("mismatched stop payload falsely certified: %+v", obs)
+		}
 	})
 	t.Run("overlapping opens conflict", func(t *testing.T) {
 		writer, reader := csmsFixture(t)

@@ -21,6 +21,8 @@ type csmsV8Transaction struct {
 	Connector       int
 	State           string
 	StopReceivedAt  string
+	MeterStop       sql.NullInt64
+	StoppedAt       sql.NullString
 	StopReceipt     *csmsV8Receipt
 	DuplicateStarts int
 	DuplicateStops  int
@@ -97,7 +99,7 @@ func observeCSMSV8Fixture(ctx context.Context, db *sql.DB, cpID, expectedSource 
 	statuses.Close()
 
 	byID := make(map[int64]*csmsV8Transaction)
-	rows, err := tx.QueryContext(ctx, "SELECT transaction_id, connector_id, state, stop_received_at FROM transactions WHERE charger_id = ? ORDER BY transaction_id", cpID)
+	rows, err := tx.QueryContext(ctx, "SELECT transaction_id, connector_id, state, stop_received_at, meter_stop, stopped_at FROM transactions WHERE charger_id = ? ORDER BY transaction_id", cpID)
 	if err != nil {
 		return out, fmt.Errorf("read CSMS transactions: %w", err)
 	}
@@ -105,8 +107,9 @@ func observeCSMSV8Fixture(ctx context.Context, db *sql.DB, cpID, expectedSource 
 		var id int64
 		var connector sql.NullInt64
 		var state string
-		var stop sql.NullString
-		if err := rows.Scan(&id, &connector, &state, &stop); err != nil {
+		var stop, stoppedAt sql.NullString
+		var stopMeter sql.NullInt64
+		if err := rows.Scan(&id, &connector, &state, &stop, &stopMeter, &stoppedAt); err != nil {
 			rows.Close()
 			return out, err
 		}
@@ -114,7 +117,7 @@ func observeCSMSV8Fixture(ctx context.Context, db *sql.DB, cpID, expectedSource 
 			out.Conflicts = append(out.Conflicts, fmt.Sprintf("unassigned/out-of-range CSMS transaction %d", id))
 			continue
 		}
-		record := &csmsV8Transaction{ID: id, Connector: int(connector.Int64), State: state}
+		record := &csmsV8Transaction{ID: id, Connector: int(connector.Int64), State: state, MeterStop: stopMeter, StoppedAt: stoppedAt}
 		if stop.Valid {
 			record.StopReceivedAt = stop.String
 		}
@@ -159,7 +162,16 @@ func observeCSMSV8Fixture(ctx context.Context, db *sql.DB, cpID, expectedSource 
 				continue
 			}
 			stopCounts[record.ID]++
-			if record.StopReceivedAt != "" && receivedAt == record.StopReceivedAt && record.StopReceipt == nil {
+			// A matching event ID/time alone is not a durable stop receipt.
+			// Verify that the *stopped* row retained the exact meter and
+			// charger timestamp from the StopTransaction payload as well.
+			meter, meterOK := payload["meter_stop"].(float64)
+			timestamp, timeOK := payload["timestamp"].(string)
+			if record.State == "stopped" &&
+				record.StopReceivedAt != "" && receivedAt == record.StopReceivedAt &&
+				record.StopReceipt == nil && record.MeterStop.Valid && record.StoppedAt.Valid &&
+				meterOK && meter == float64(record.MeterStop.Int64) &&
+				timeOK && timestamp == record.StoppedAt.String {
 				record.StopReceipt = &csmsV8Receipt{EventID: eventID, ReceivedAt: receivedAt}
 			}
 			continue
