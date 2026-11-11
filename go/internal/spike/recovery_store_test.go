@@ -123,7 +123,7 @@ func TestR6C1LockSurvivesAcrossProcesses(t *testing.T) {
 		_ = s.Close()
 		os.Exit(0)
 	}
-	root:=t.TempDir()
+	root:=r6c1PrivateRoot(t)
 	first,err:=OpenSQLiteRecoveryStore(root,r6c1Identity())
 	if err!=nil {t.Fatal(err)}
 	runHelper:=func() error {
@@ -140,7 +140,7 @@ func TestR6C1LockSurvivesAcrossProcesses(t *testing.T) {
 
 func TestR6C1CorruptUnsafePermissionsAndSymlinkFailClosed(t *testing.T) {
 	id:=r6c1Identity()
-	root:=t.TempDir()
+	root:=r6c1PrivateRoot(t)
 	s,err:=OpenSQLiteRecoveryStore(root,id)
 	if err!=nil {t.Fatal(err)}
 	key:=s.hash
@@ -158,7 +158,7 @@ func TestR6C1CorruptUnsafePermissionsAndSymlinkFailClosed(t *testing.T) {
 }
 
 func TestR6C1FsyncAndWriteFailureInjectionNeverUnlock(t *testing.T) {
-	root:=t.TempDir()
+	root:=r6c1PrivateRoot(t)
 	id:=r6c1Identity()
 	_,err:=openSQLiteRecoveryStore(root,id,func(string)error{return errors.New("EIO fsync")})
 	if err==nil || !strings.Contains(err.Error(),"fsync"){t.Fatalf("injected fsync error accepted: %v",err)}
@@ -201,7 +201,7 @@ func TestR6C1RemoteServeDeniedBeforeOpeningWebSocket(t *testing.T) {
 	o:=ServeOptions{
 		Options:Options{CP:id.CP,URL:id.CSMS,Vendor:"Arthexis",Model:"Simulator"},
 		ConnectTimeout:time.Second,Remote:true,Connectors:id.Connectors,
-		RecoveryRoot:t.TempDir(),RecoveryTenant:id.Tenant,
+		RecoveryRoot:r6c1PrivateRoot(t),RecoveryTenant:id.Tenant,
 	}
 	if err:=Serve(context.Background(),o);!errors.Is(err,ErrRecoveryQuarantined){
 		t.Fatalf("real entrypoint did not deny unreconciled CSMS: %v",err)
