@@ -3,6 +3,7 @@ package spike
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,15 +15,11 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// This is an intentionally NEGATIVE end-to-end acceptance test: it proves why
-// R0-R5 cannot be marked Ready. An in-process restart of Serve for the same
-// CP identity announces Available even while the fake CSMS still owns an
-// unconfirmed transaction from the previous Serve instance.
-//
-// It does not connect to a real CSMS or restart a system process. A durable
-// journal plus reconciliation will have to change this assertion in a future
-// separately approved recovery stage.
-func TestR6ReproducesUnsafeFreshProcessAfterUnconfirmedTransaction(t *testing.T) {
+// This R6C-1 regression test retains an unconfirmed transaction in a
+// synthetic CSMS, then verifies a fresh production-style Serve is denied
+// BEFORE even opening a new WebSocket; there is no trusted CSMS witness.
+// The first connection is the legacy test-only loopback fixture.
+func TestR6C1QuarantinesFreshProcessAfterUnconfirmedTransaction(t *testing.T) {
 	var connections atomic.Int32
 	var csmsOpen atomic.Bool
 	var stopObserved atomic.Int32
@@ -178,6 +175,7 @@ func TestR6ReproducesUnsafeFreshProcessAfterUnconfirmedTransaction(t *testing.T)
 		ConnectTimeout: time.Second, Remote: true, Connectors: 1,
 		RemotePowerKW: 7.2, RemoteDuration: 5 * time.Second,
 		RemoteMeterInterval: 20 * time.Millisecond,
+        testOnlyLoopback:true,
 	}
 	firstCtx, stopFirst := context.WithTimeout(context.Background(), 12*time.Second)
 	defer stopFirst()
@@ -202,33 +200,24 @@ func TestR6ReproducesUnsafeFreshProcessAfterUnconfirmedTransaction(t *testing.T)
 		t.Fatal("CSMS fixture must retain the old transaction before restart")
 	}
 
-	// A distinct Serve call simulates a new process with a fresh in-memory
-	// ledger. No production process is restarted and no state is persisted.
-	secondCtx, stopSecond := context.WithTimeout(context.Background(), 8*time.Second)
-	defer stopSecond()
-	secondResult := make(chan error, 1)
-	go func() { secondResult <- Serve(secondCtx, base) }()
-	select {
-	case stillOpen := <-newAvailable:
-		if !stillOpen {
-			t.Fatal("fixture lost its old CSMS transaction before the unsafe Available")
-		}
-		t.Log("NO-GO: fresh Go Serve announced Available while prior CSMS tx 9001 remained open")
-	case err := <-fixtureErrors:
-		t.Fatalf("second CSMS fixture failed: %v", err)
-	case err := <-secondResult:
-		t.Fatalf("second Serve exited before Available observation: %v", err)
-	case <-time.After(3*time.Second):
-		t.Fatal("second Serve did not reach initial Available")
+	// The real Serve entrypoint cannot use the test-only loopback bypass.
+	// It initializes a private SQLite state root as Quarantined and refuses
+	// the attempt BEFORE contacting the synthetic CSMS.
+	second := base
+	second.testOnlyLoopback = false
+	second.RecoveryRoot = t.TempDir()
+	second.RecoveryTenant = "R6C1"
+	err := Serve(context.Background(), second)
+	if !errors.Is(err, ErrRecoveryQuarantined) {
+		t.Fatalf("fresh Serve was not quarantined: %v", err)
 	}
-	stopSecond()
 	select {
-	case <-secondResult:
-	case <-time.After(5*time.Second):
-		t.Fatal("second Serve did not terminate after cancellation")
+	case <-newAvailable:
+		t.Fatal("unreconciled Serve emitted a false Available")
+	default:
 	}
-	if connections.Load() != 2 || stopObserved.Load() != 0 || !csmsOpen.Load() {
-		t.Fatalf("restart fixture invalid: sessions=%d stops=%d csmsOpen=%v",
+	if connections.Load() != 1 || stopObserved.Load() != 0 || !csmsOpen.Load() {
+		t.Fatalf("restart guard failed: sessions=%d stops=%d csmsOpen=%v",
 			connections.Load(), stopObserved.Load(), csmsOpen.Load())
 	}
 }

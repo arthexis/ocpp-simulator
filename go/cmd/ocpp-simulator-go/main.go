@@ -31,6 +31,8 @@ func run(args []string) error {
 	connector := flags.Int("connector", 0, "run a single charging transaction then exit")
  remote := flags.Bool("remote", false, "enable experimental RemoteStart, RemoteStop and Soft/Hard Reset; no auto-reconnect")
  connectors := flags.Int("connectors", 0, "number of connectors in remote mode (1-128)")
+ recoveryDir := flags.String("recovery-dir", "", "private absolute Go recovery state directory (remote; starts quarantined)")
+ recoveryTenant := flags.String("recovery-tenant", "", "explicit tenant/source identity used for Go recovery (remote)")
 	rfid := flags.String("rfid", "TEST001", "authorization identifier")
 	power := flags.Float64("power", 7.2, "charging power ceiling in kW")
 	duration := flags.Float64("duration", 60, "one-shot charging duration in seconds")
@@ -96,6 +98,7 @@ func run(args []string) error {
   RemoteDuration:time.Duration(*duration*float64(time.Second)),
   RemoteMeterInterval:time.Duration(*meterInterval*float64(time.Second)),
   RemoteBatteryKWh:remoteBatteryKWh, RemoteBatterySOC:remoteBatterySOC, RemoteBatterySeed:remoteBatterySeed,
+  RecoveryRoot:*recoveryDir, RecoveryTenant:*recoveryTenant,
 	})
 }
 

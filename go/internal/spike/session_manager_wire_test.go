@@ -123,6 +123,7 @@ func TestRemoteServeAnnouncesInitialAvailableOnWire(t *testing.T) {
 			},
 			ConnectTimeout: 2 * time.Second,
 			Remote:         true,
+            testOnlyLoopback: true,
 			Connectors:     2,
 		})
 	}()

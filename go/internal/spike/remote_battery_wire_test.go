@@ -208,7 +208,7 @@ func TestR4TwoIndependentBatteriesOCPPJLoopback(t *testing.T) {
 	go func(){
 		exited<-Serve(ctx,ServeOptions{
 			Options:Options{CP:"R4-TEST",URL:"ws"+strings.TrimPrefix(server.URL,"http")+"/R4-TEST",Vendor:"Arthexis",Model:"Simulator"},
-			ConnectTimeout:time.Second,Remote:true,Connectors:2,RemotePowerKW:7.2,
+			ConnectTimeout:time.Second,Remote:true,Connectors:2,RemotePowerKW:7.2,testOnlyLoopback:true,
 			RemoteDuration:2*time.Second,RemoteMeterInterval:10*time.Millisecond,
 			RemoteBatteryKWh:0.00001,RemoteBatterySOC:95,RemoteBatterySeed:53,
 		})

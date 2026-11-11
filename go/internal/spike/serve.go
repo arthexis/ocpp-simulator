@@ -5,6 +5,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"net"
+	"testing"
 	"fmt"
 	"net/url"
 	"os"
@@ -30,6 +32,13 @@ type ServeOptions struct {
  RemoteBatteryKWh float64
  RemoteBatterySOC float64
  RemoteBatterySeed uint64
+ // RecoveryRoot is a private absolute directory, intentionally separate
+ // from releases and all existing CSMS/collector SQLite databases.
+ RecoveryRoot string
+ RecoveryTenant string
+ // Unexported offline-only proof of a synthetic loopback CSMS. The normal
+ // executable cannot enable this path, even with environment variables.
+ testOnlyLoopback bool
 }
 
 var cpName = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
@@ -72,6 +81,20 @@ func ValidateServe(o ServeOptions) error {
   return fmt.Errorf("remote battery settings require --remote")
  }
  if o.Charge!=nil && o.Remote {return fmt.Errorf("one-shot --connector and --remote are mutually exclusive")}
+ if o.Remote {
+   if o.testOnlyLoopback {
+     host,_:=url.Parse(o.URL)
+     h:=host.Hostname()
+     ip:=net.ParseIP(h)
+     if !testing.Testing() || !(h=="localhost" || (ip!=nil && ip.IsLoopback())) {
+       return fmt.Errorf("test authority only applies to local synthetic CSMS under go test")
+     }
+   } else if o.RecoveryRoot=="" || o.RecoveryTenant=="" {
+     return fmt.Errorf("remote recovery requires explicit --recovery-dir and --recovery-tenant; quarantined")
+   }
+ } else if o.RecoveryRoot!="" || o.RecoveryTenant!="" || o.testOnlyLoopback {
+   return fmt.Errorf("recovery options require remote mode")
+ }
 	return nil
 }
 
@@ -101,6 +124,17 @@ func (o ServeOptions) tlsConfig() (*tls.Config, error) {
 func Serve(ctx context.Context, o ServeOptions) (resultErr error) {
 	if err := ValidateServe(o); err != nil {
 		return err
+	}
+	if o.Remote && !o.testOnlyLoopback {
+		identity:=RecoveryIdentity{Tenant:o.RecoveryTenant,CSMS:o.URL,CP:o.CP,Connectors:o.Connectors}
+		store,err:=OpenSQLiteRecoveryStore(o.RecoveryRoot,identity)
+		if err!=nil {return fmt.Errorf("remote recovery store: %w",err)}
+		defer store.Close()
+		// Startup does not reach even BootNotification until a trusted CSMS
+		// reconciliation mechanism is separately implemented and approved.
+		if err:=store.BeforeAvailable(ctx);err!=nil {
+			return fmt.Errorf("remote startup gate: %w",err)
+		}
 	}
 	tlsCfg, err := o.tlsConfig()
 	if err != nil {

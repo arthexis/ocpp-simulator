@@ -389,7 +389,7 @@ R6, mark Ready or change any running system.**
 
 ## 10. Decision record (pending)
 
-- ADR-R6B status: **PROPOSED / UNAPPROVED**.
+- ADR-R6B status: **SQLite direction APPROVED for R6C-1 only**; CSMS reconciliation and fencing remain unapproved/unimplemented.
 - Preferred option: **private local SQLite with WAL + FULL sync** for the
   Go simulator, subject to driver/FS validation. Alternative: append-only
   journal with length+CRC+fsync and replay/compaction correctness tests.
@@ -403,3 +403,11 @@ R6, mark Ready or change any running system.**
 - Next action: choose the store **and** agree how the CSMS can provide
   authoritative reconciliation/fencing. If this contract cannot be
   provided, retain NO-GO and require manual recovery.
+
+## Implementation note — R6C-1
+
+The user approved the SQLite storage direction only for the first fail-closed
+increment. See [R6C-1 scope](recovery-r6c1.md). A private SQLite state
+bootstrap and an unconditional quarantine gate do not authorize production
+activation or any CleanVerified transition. The CSMS-side reconciliation
+contract remains a separately gated dependency.

@@ -123,3 +123,13 @@ tests followed by separately authorized isolated field validation. A
 green offline CI is not proof of production readiness. See
 [reset and shutdown limits](docs/reset-r5.md) and
 [full R6 evaluation](docs/audit-r6.md).
+
+## R6C-1 recovery bootstrap
+
+The Go remote CLI requires `--recovery-dir` (private absolute directory) and
+`--recovery-tenant` (explicit source/tenant). A newly created or reopened
+SQLite recovery store is always `Quarantined`; because no authoritative CSMS
+reconciliation service exists, **actual Go remote mode currently refuses all
+connections, even to an empty CSMS**. The R1–R5 loopback integration tests
+use a test-binary-only fixture path; this is not a production bypass.
+See [R6C-1 details](docs/recovery-r6c1.md). Python remains the default.

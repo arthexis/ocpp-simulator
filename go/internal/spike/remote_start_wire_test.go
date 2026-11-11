@@ -289,7 +289,7 @@ func TestR3RemoteStartStopOCPPJLoopback(t *testing.T) {
 				Vendor: "Arthexis", Model: "Simulator",
 			},
 			ConnectTimeout: time.Second,
-			Remote: true, Connectors: 1,
+			Remote: true, Connectors: 1, testOnlyLoopback:true,
 			RemotePowerKW: 7.2,
 			RemoteDuration: 2*time.Second,
 			RemoteMeterInterval: 40*time.Millisecond,

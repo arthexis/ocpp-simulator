@@ -172,7 +172,7 @@ func TestR5OCPPJSoftHardResetAndDisconnect(t *testing.T) {
 			go func(){
 				serveDone<-Serve(ctx,ServeOptions{
 					Options:Options{CP:"R5-LOCAL",URL:"ws"+strings.TrimPrefix(server.URL,"http")+"/R5-LOCAL",Vendor:"Arthexis",Model:"Simulator"},
-					ConnectTimeout:time.Second,Remote:true,Connectors:1,RemotePowerKW:7.2,
+					ConnectTimeout:time.Second,Remote:true,Connectors:1,RemotePowerKW:7.2,testOnlyLoopback:true,
 					RemoteDuration:5*time.Second,RemoteMeterInterval:20*time.Millisecond,
 				})
 			}()
