@@ -88,6 +88,20 @@
   when:
     - ocpp_simulator_existing.stat.exists | default(false)
 
+- name: Inspect isolated LAB-6 client in immutable release
+  ansible.builtin.stat:
+    path: "{{ ocpp_simulator_release }}/bin/r6c3b2-uidlab"
+  register: ocpp_simulator_existing_lab
+  when: ocpp_simulator_existing.stat.exists | default(false)
+
+- name: Reject existing release missing isolated LAB-6 client
+  ansible.builtin.assert:
+    that:
+      - ocpp_simulator_existing_lab.stat.isreg | default(false)
+      - ocpp_simulator_existing_lab.stat.executable | default(false)
+    fail_msg: Existing immutable release lacks the test-only client; refusing in-place repair.
+  when: ocpp_simulator_existing.stat.exists | default(false)
+
 - name: Reject incomplete immutable release without modifying it
   ansible.builtin.assert:
     that:
@@ -132,6 +146,34 @@
   when:
     - not (ocpp_simulator_existing.stat.exists | default(false))
 
+- name: Inspect pinned ocpp-go module in staged source
+  ansible.builtin.command:
+    argv: [go, list, -m, -json, github.com/lorenzodonini/ocpp-go]
+    chdir: "{{ ocpp_simulator_release }}/go-source"
+  environment:
+    GOTOOLCHAIN: local
+  register: ocpp_simulator_ocpp_go_module
+  changed_when: false
+  when: not (ocpp_simulator_existing.stat.exists | default(false))
+
+- name: Reject unpinned ocpp-go module
+  ansible.builtin.assert:
+    that:
+      - (ocpp_simulator_ocpp_go_module.stdout | from_json).Path == 'github.com/lorenzodonini/ocpp-go'
+      - (ocpp_simulator_ocpp_go_module.stdout | from_json).Version == 'v0.19.0'
+      - (ocpp_simulator_ocpp_go_module.stdout | from_json).Sum == 'h1:THNriVV3bUWkGzaIkDeytcgoeBRjoN9ezPHsddIDfgc='
+    fail_msg: Staged source does not resolve the pinned ocpp-go v0.19.0 module.
+  when: not (ocpp_simulator_existing.stat.exists | default(false))
+
+- name: Verify staged Go module integrity
+  ansible.builtin.command:
+    argv: [go, mod, verify]
+    chdir: "{{ ocpp_simulator_release }}/go-source"
+  environment:
+    GOTOOLCHAIN: local
+  changed_when: false
+  when: not (ocpp_simulator_existing.stat.exists | default(false))
+
 - name: Build pinned Go backend into candidate release
   ansible.builtin.command:
     argv:
@@ -145,6 +187,42 @@
     GOTOOLCHAIN: local
   when:
     - not (ocpp_simulator_existing.stat.exists | default(false))
+
+- name: Build isolated LAB-6 client into the same candidate release
+  ansible.builtin.command:
+    argv:
+      - go
+      - build
+      - -trimpath
+      - -o
+      - "{{ ocpp_simulator_release }}/bin/r6c3b2-uidlab"
+      - ./cmd/r6c3b2-uidlab
+    chdir: "{{ ocpp_simulator_release }}/go-source"
+  environment:
+    GOTOOLCHAIN: local
+    CGO_ENABLED: "0"
+  when: not (ocpp_simulator_existing.stat.exists | default(false))
+
+- name: Calculate relative checksum of isolated LAB-6 client
+  ansible.builtin.command:
+    argv: [sha256sum, r6c3b2-uidlab]
+    chdir: "{{ ocpp_simulator_release }}/bin"
+  register: ocpp_simulator_lab_sha256
+  changed_when: false
+  when: not (ocpp_simulator_existing.stat.exists | default(false))
+
+- name: Store isolated LAB-6 client checksum in immutable release
+  ansible.builtin.copy:
+    dest: "{{ ocpp_simulator_release }}/bin/r6c3b2-uidlab.sha256"
+    content: "{{ ocpp_simulator_lab_sha256.stdout }}\n"
+    mode: "0644"
+  when: not (ocpp_simulator_existing.stat.exists | default(false))
+
+- name: Verify isolated LAB-6 client checksum before activation
+  ansible.builtin.command:
+    argv: [sha256sum, -c, r6c3b2-uidlab.sha256]
+    chdir: "{{ ocpp_simulator_release }}/bin"
+  changed_when: false
 
 - name: Verify Go backend
   ansible.builtin.command:

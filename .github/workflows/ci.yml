@@ -103,6 +103,11 @@ jobs:
           "$HOME/.local/bin/ocpp-simulator" --help
           "$HOME/.local/bin/ocpp-simulator-py" --help
           "$HOME/.local/bin/ocpp-simulator-go" --help
+          # Ansible builds the lab CLI but does not link or execute it.
+          test -x "$root/current/bin/r6c3b2-uidlab"
+          ( cd "$root/current/bin" && sha256sum -c r6c3b2-uidlab.sha256 )
+          go version -m "$root/current/bin/r6c3b2-uidlab" | grep -F 'github.com/lorenzodonini/ocpp-go' | grep -F 'v0.19.0'
+          test ! -e "$HOME/.local/bin/r6c3b2-uidlab"
           "$HOME/.local/bin/ocpp-simulator" --backend go run --help
           "$HOME/.local/bin/ocpp-simulator" --backend python run --help
           # Same-SHA deploy must leave the current pointer unchanged.
