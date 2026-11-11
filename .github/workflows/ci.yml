@@ -148,6 +148,8 @@ jobs:
         run: go test -race -count=3 ./internal/spike -run '^TestR6C3B2LAB5'
       - name: Cross-compile offline ARM64 UID test executable (LAB-5)
         shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/r6c3b2-lab5
@@ -159,9 +161,10 @@ jobs:
           # Verify the exact pinned dependency independently in the module graph.
           go list -m -json github.com/lorenzodonini/ocpp-go > /tmp/r6c3b2-lab5/ocpp-go-module.json
           jq -e '.Path == "github.com/lorenzodonini/ocpp-go" and .Version == "v0.19.0" and .Sum == "h1:THNriVV3bUWkGzaIkDeytcgoeBRjoN9ezPHsddIDfgc="' /tmp/r6c3b2-lab5/ocpp-go-module.json
-          sha256sum /tmp/r6c3b2-lab5/uidlab-linux-arm64.test > /tmp/r6c3b2-lab5/SHA256SUMS
+          ( cd /tmp/r6c3b2-lab5 && sha256sum uidlab-linux-arm64.test > SHA256SUMS && sha256sum -c SHA256SUMS )
           printf 'checkout=%s\n' "$(git rev-parse HEAD)" > /tmp/r6c3b2-lab5/source-identity.txt
           printf 'event=%s\n' "$GITHUB_EVENT_NAME" >> /tmp/r6c3b2-lab5/source-identity.txt
+          printf 'pr_head=%s\n' "$PR_HEAD_SHA" >> /tmp/r6c3b2-lab5/source-identity.txt
       - uses: actions/upload-artifact@v4
         with:
           name: r6c3b2-lab5-arm64-offline-test-elf
