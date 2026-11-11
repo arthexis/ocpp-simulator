@@ -70,3 +70,12 @@ recorded as a **NO-GO** rather than weakening or hiding the assertions.
 Do not mark the Draft pull request Ready, close the work, or merge because
 R6 tests pass. Re-evaluate once the blocking architecture gaps are resolved
 in a separately authorized phase.
+
+## R6B follow-up (design only)
+
+The [proposed crash-safe recovery architecture](recovery-r6b-design.md) compares
+an fsync-backed append-only journal with a private local SQLite ledger, defines
+identity/generation and CSMS fencing/reconciliation requirements, and specifies
+failure-injection acceptance tests. Its decision record remains **unapproved**;
+this R6 NO-GO verdict stays in force. No persistence or reconnect behavior was
+implemented by R6B.
