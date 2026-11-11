@@ -60,6 +60,8 @@ type RecoveryStatus struct {
 	Generation int64
 	TrustState string
 	Pending    []RecoveryPending
+ // R6C-2 outstanding durable command attempts, including unknown ACKs.
+ OutstandingAttempts int
 }
 
 type RecoveryPending struct {
@@ -325,6 +327,12 @@ func (s *SQLiteRecoveryStore) Status(ctx context.Context) (RecoveryStatus,error)
 		out.Pending=append(out.Pending,p)
 	}
 	if err:=rows.Err();err!=nil{s.unhealthy=true;return RecoveryStatus{},err}
+ if err:=rows.Close();err!=nil{s.unhealthy=true;return RecoveryStatus{},err}
+ if err:=s.db.QueryRowContext(ctx,`SELECT COUNT(*) FROM recovery_attempts
+ WHERE phase NOT IN ('Aborted','StartRejected','Closed')`).Scan(&out.OutstandingAttempts);err!=nil{
+  s.unhealthy=true
+  return RecoveryStatus{},fmt.Errorf("read outstanding recovery attempts: %w",err)
+ }
 	return out,nil
 }
 

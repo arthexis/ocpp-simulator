@@ -91,6 +91,10 @@ func TestR6C2UnknownStartAndStopAckSurviveRestart(t *testing.T){
    next,err:=OpenSQLiteRecoveryStore(root,r6c1Identity());if err!=nil{t.Fatal(err)}
    defer next.Close()
    a:=r6c2Attempt(t,next,expect)
+   status,err:=next.Status(context.Background())
+   if err!=nil||status.OutstandingAttempts!=1||status.TrustState!="Quarantined" {
+    t.Fatalf("recoverable pending attempt not surfaced: %+v %v",status,err)
+   }
    if mode=="start-unknown"&&a.TransactionID!=0||mode=="stop-unknown"&&(a.TransactionID!=6201||a.MeterWh!=3){
     t.Fatalf("uncertain receipt replaced on restart: %+v",a)
    }
@@ -222,4 +226,26 @@ func TestR6C2DispatcherCommitBeforeEveryOCPPCommand(t *testing.T){
  if !strings.Contains(cp.history(),"StartTransaction")||!strings.Contains(cp.history(),"StopTransaction"){
   t.Fatal("OCPP fixture never exercised command sends")
  }
+}
+
+
+func TestR6C2RejectsMeterAndFinalStopRollback(t *testing.T){
+ s,_:=r6c2Open(t);defer s.Close()
+ m,_:=newSessionManagerWithRecovery(context.Background(),2,s);defer m.Close()
+ _,err:=m.Reserve(1);if err!=nil{t.Fatal(err)}
+ if err:=m.BeginStart(1);err!=nil{t.Fatal(err)}
+ if err:=m.Start(1,8101);err!=nil{t.Fatal(err)}
+ if err:=m.RecordMeterIntent(1,8101,5,7000,RecoveryBattery{});err!=nil{t.Fatal(err)}
+ if err:=m.RecordMeterConfirmation(1,8101);err!=nil{t.Fatal(err)}
+ if err:=m.RecordMeterIntent(1,8101,0,7000,RecoveryBattery{});err==nil{
+  t.Fatal("silent meter rollback could diverge from CSMS")
+ }
+ got:=r6c2Attempt(t,s,"MeterAcked")
+ if got.MeterWh!=5{t.Fatalf("loss of durably acknowledged meter: %+v",got)}
+ if _,err:=m.BeginStopReasonWithMeter(1,8101,0);err==nil{
+  t.Fatal("StopTransaction was admitted with a decreasing final meter")
+ }
+ got=r6c2Attempt(t,s,"MeterAcked")
+ if got.MeterWh!=5{t.Fatal("failed stop rewrote old meter",got)}
+ if !errors.Is(s.BeforeAvailable(context.Background()),ErrRecoveryQuarantined){t.Fatal("gate unlocked")}
 }

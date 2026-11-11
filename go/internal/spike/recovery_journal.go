@@ -107,8 +107,11 @@ func(s *SQLiteRecoveryStore) step(ctx context.Context,id string,connector int,fr
   if !ok{return fmt.Errorf("disallowed journal transition %s -> %s",oldPhase,to)}
   if existing>0&&existing!=csms{return fmt.Errorf("CSMS ID mismatch")}
   if csms==0&&existing>0{csms=existing}
-  if meter==0&&oldMeter>0{meter=oldMeter}
-  if meter<oldMeter{return fmt.Errorf("meter regression")}
+  // A zero Wh field on receipt-only updates means "leave unchanged".
+  // But MeterIntent/StopIntent carry actual wire values: zero there is
+  // a forbidden rollback after a prior positive meter sample.
+  if meter==0&&oldMeter>0&&to!="MeterIntent"&&to!="StopIntent"{meter=oldMeter}
+  if meter<oldMeter{return fmt.Errorf("meter rollback refused: %d < %d",meter,oldMeter)}
   if to=="ChargingKnown"||to=="MeterIntent"||to=="StopRequested"||to=="StopIntent"||to=="StopAcked"||to=="Closed"{
    if csms<=0{return fmt.Errorf("real CSMS ID required")}
   }

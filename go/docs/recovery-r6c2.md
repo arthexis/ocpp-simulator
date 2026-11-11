@@ -31,6 +31,12 @@ Local/Remote/SoftReset reason, committed before calling
 and **before** announcing Available. `Closed` is committed before
 the in-memory `ConnectorLedger` releases the slot.
 
+An attempted meter regression (including a zero Wh sample after a positive
+confirmed meter), or a final StopTransaction meter lower than the last
+durable sample, is refused before any new OCPP side effect. The RecoveryStatus
+read model explicitly exposes the count of outstanding version-2 attempts,
+in addition to legacy R6C-1 pending records; no empty list can grant trust.
+
 The database appends a monotonically sequenced `recovery_events` receipt
 and updates the current `recovery_attempts` row in the **same SQLite
 transaction**, with WAL + `synchronous=FULL`. A partial write or
