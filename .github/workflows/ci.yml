@@ -116,7 +116,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 12
     defaults:
       run:
         working-directory: go
@@ -169,6 +169,36 @@ jobs:
         with:
           name: r6c3b2-lab5-arm64-offline-test-elf
           path: /tmp/r6c3b2-lab5/
+          if-no-files-found: error
+          retention-days: 7
+      - name: R6C-3B2 LAB-6 test-only client negatives
+        run: go test -race -count=3 ./cmd/r6c3b2-uidlab
+      - name: R6C-3B2 LAB-6 build and attest client ARM64
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(go env GOSUMDB)" != off
+          go mod download -json github.com/lorenzodonini/ocpp-go@v0.19.0 | jq -e \
+            '.Path == "github.com/lorenzodonini/ocpp-go" and .Version == "v0.19.0" and .Sum == "h1:THNriVV3bUWkGzaIkDeytcgoeBRjoN9ezPHsddIDfgc=" and (.Error == null)'
+          go mod verify
+          mkdir -p /tmp/r6c3b2-lab6
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o /tmp/r6c3b2-lab6/uidlab-client-linux-arm64 ./cmd/r6c3b2-uidlab
+          file /tmp/r6c3b2-lab6/uidlab-client-linux-arm64 | grep -F 'ELF 64-bit'
+          readelf -h /tmp/r6c3b2-lab6/uidlab-client-linux-arm64 | grep -F 'AArch64'
+          go version -m /tmp/r6c3b2-lab6/uidlab-client-linux-arm64 | tee /tmp/r6c3b2-lab6/provenance.txt
+          grep -F 'github.com/lorenzodonini/ocpp-go' /tmp/r6c3b2-lab6/provenance.txt | grep -F 'v0.19.0'
+          go list -m -json github.com/lorenzodonini/ocpp-go > /tmp/r6c3b2-lab6/ocpp-go-module.json
+          jq -e '.Path == "github.com/lorenzodonini/ocpp-go" and .Version == "v0.19.0" and .Sum == "h1:THNriVV3bUWkGzaIkDeytcgoeBRjoN9ezPHsddIDfgc="' /tmp/r6c3b2-lab6/ocpp-go-module.json
+          ( cd /tmp/r6c3b2-lab6 && sha256sum uidlab-client-linux-arm64 > SHA256SUMS && sha256sum -c SHA256SUMS )
+          printf 'checkout=%s\nevent=%s\npr_head=%s\nrun_id=%s\nrun_attempt=%s\n' \
+            "$(git rev-parse HEAD)" "$GITHUB_EVENT_NAME" "$PR_HEAD_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > /tmp/r6c3b2-lab6/source-identity.txt
+          test "$PR_HEAD_SHA" != ""
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r6c3b2-lab6-arm64-isolated-client
+          path: /tmp/r6c3b2-lab6/
           if-no-files-found: error
           retention-days: 7
 
