@@ -158,6 +158,10 @@ func TestR5OCPPJSoftHardResetAndDisconnect(t *testing.T) {
 			defer func(){close(release);server.Close()}()
 			ctx,cancel:=context.WithTimeout(context.Background(),6*time.Second)
 			defer cancel()
+			// Test deadline is deliberately independent from Serve's signal
+			// context; Cancel mode intentionally closes ctx mid-transaction.
+			testDeadline:=time.NewTimer(8*time.Second)
+			defer testDeadline.Stop()
 			go func(){
 				select {
 				case <-cancelSignal: cancel()
@@ -188,7 +192,7 @@ func TestR5OCPPJSoftHardResetAndDisconnect(t *testing.T) {
 				if mode=="Hard"&&(err==nil||!strings.Contains(err.Error(),"reset")) {t.Fatalf("Hard termination was silent: %v",err)}
 				// Put the terminal result back for the common assertion.
 				serveDone<-err
-			case <-ctx.Done():t.Fatal("OCPP reset fixture timed out")
+			case <-testDeadline.C:t.Fatal("OCPP reset fixture timed out")
 			}
 			if !got.startAccepted||!got.active{t.Fatalf("did not establish real CSMS transaction: %+v",got)}
 			if mode=="Soft"{
