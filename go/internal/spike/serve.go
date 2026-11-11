@@ -98,11 +98,13 @@ func Serve(ctx context.Context, o ServeOptions) error {
 	cp := ocpp16.NewChargePoint(o.CP, nil, client)
  var heartbeatUpdates chan int
  var remoteHandler *RemoteHandler
+ var sessions *SessionManager
  if o.Remote {
-  ledger,err:=NewConnectorLedger(o.Connectors)
-  if err!=nil{return err}
-  heartbeatUpdates=make(chan int,1)
-  remoteHandler=&RemoteHandler{Ledger:ledger,heartbeatUpdates:heartbeatUpdates}
+  sessions, err = NewSessionManager(ctx, o.Connectors)
+  if err != nil { return err }
+  defer sessions.Close()
+  heartbeatUpdates = make(chan int, 1)
+  remoteHandler = &RemoteHandler{Ledger: sessions.ledger, heartbeatUpdates: heartbeatUpdates}
   cp.SetCoreHandler(remoteHandler)
  }
 	// ocpp-go's API accepts a base URL and appends /<chargePointID>.
@@ -134,6 +136,14 @@ func Serve(ctx context.Context, o ServeOptions) error {
 		interval = result.interval
 	}
 	fmt.Printf("BootNotification: Accepted (heartbeat %ds)\n", interval)
+ if sessions != nil {
+  if err := sessions.AnnounceInitialAvailable(ctx, func(connector int) error {
+   _, statusErr := cp.StatusNotification(connector, core.NoError, core.ChargePointStatusAvailable)
+   return statusErr
+  }); err != nil {
+   return fmt.Errorf("initial remote connector status: %w", err)
+  }
+ }
 	if remoteHandler!=nil {remoteHandler.mu.Lock();remoteHandler.heartbeat=interval;remoteHandler.mu.Unlock()}
  ticker := time.NewTicker(time.Duration(interval)*time.Second)
 	defer ticker.Stop()
