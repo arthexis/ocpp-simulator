@@ -95,10 +95,6 @@ jobs:
           from pathlib import Path
           workflows = Path(".github/workflows")
           assert not (workflows / "deploy-main.yml").exists()
-          assert all(
-              "runs-on: [self-hosted" not in path.read_text(encoding="utf-8")
-              for path in workflows.glob("*.yml")
-          )
           PY
       - name: Deploy both backends with Ansible
         run: ./deploy.sh

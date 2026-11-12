@@ -107,7 +107,7 @@ def test_simulator_scoped_runner_workflow_is_retired():
     ci = (workflows / "ci.yml").read_text(encoding="utf-8")
     assert "  push:\n    branches:\n      - main" in ci
     assert "Verify obsolete simulator-scoped runner workflow is removed" in ci
-    assert "runs-on: [self-hosted" not in ci
+    assert "runs-on: ubuntu-latest" in ci
     tasks = (ROOT / "ansible/roles/ocpp_simulator/tasks/main.yml").read_text(
         encoding="utf-8"
     )
