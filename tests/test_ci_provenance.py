@@ -58,13 +58,29 @@ def test_lab_provenance_uses_actual_checkout_for_both_events(
     script = "set -euo pipefail\n" + identity_commands(
         step_name, lab_directory, identity_path
     )
-    subprocess.run(["bash", "-c", script], cwd=ROOT, env=env, check=True, timeout=15)
+    # A container checkout can be owned by a different UID; emulate the
+    # same Git HEAD operation in an isolated, user-owned test repository.
+    # Do not weaken Git's safe.directory policy or change runner settings.
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    subprocess.run(
+        ["git", "init", "--quiet"], cwd=checkout, check=True, timeout=15
+    )
+    subprocess.run(
+        ["git", "-c", "user.name=CI Fixture", "-c",
+         "user.email=ci-fixture@example.invalid",
+         "commit", "--allow-empty", "--quiet", "-m", "offline test HEAD"],
+        cwd=checkout, check=True, timeout=15,
+    )
+    subprocess.run(
+        ["bash", "-c", script], cwd=checkout, env=env, check=True, timeout=15
+    )
     recorded = dict(
         line.split("=", 1)
         for line in identity_path.read_text(encoding="utf-8").splitlines()
     )
     actual_head = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, timeout=15
+        ["git", "rev-parse", "HEAD"], cwd=checkout, text=True, timeout=15
     ).strip()
     assert recorded["checkout"] == actual_head
     assert recorded["event"] == event_name
