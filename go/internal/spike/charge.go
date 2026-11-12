@@ -18,6 +18,8 @@ type ChargeOptions struct {
 	PowerKW float64
 	Duration time.Duration
 	MeterInterval time.Duration
+ Battery *Battery
+ Seeded bool
 }
 
 // EnergyWh computes cumulative meter energy from simulated elapsed time, not
@@ -34,7 +36,8 @@ func (o ChargeOptions) Validate() error {
 		math.IsInf(o.Duration.Seconds(), 0) {
 		return fmt.Errorf("invalid one-shot charging parameters")
 	}
-	if o.PowerKW*1000*o.Duration.Seconds()/3600 > float64(1<<31-1) {
+	if o.Battery != nil && (o.Battery.CapacityWh <= 0 || o.Battery.EnergyWh < 0 || o.Battery.EnergyWh > o.Battery.CapacityWh) { return fmt.Errorf("invalid battery state") }
+	if o.Battery == nil && o.PowerKW*1000*o.Duration.Seconds()/3600 > float64(1<<31-1) {
 		return fmt.Errorf("energy exceeds supported OCPP meter range")
 	}
 	return nil
@@ -92,16 +95,34 @@ func Charge(ctx context.Context, cp ChargePoint, o ChargeOptions) (int, error) {
 	}
 
 	var elapsed time.Duration
+    var initialBatteryWh float64
+    if o.Battery != nil { initialBatteryWh=o.Battery.EnergyWh }
 	var wh int
 	var meterErr error
-	for elapsed < o.Duration {
+	for elapsed < o.Duration && (o.Battery == nil || !o.Battery.Full()) {
 		step := o.MeterInterval
 		if remaining := o.Duration - elapsed; remaining < step { step = remaining }
 		if !waitStep(ctx,step) { break }
 		elapsed += step
-		wh = EnergyWh(o.PowerKW,elapsed)
-		sample := types.SampledValue{Value:fmt.Sprintf("%d",wh),Measurand:types.MeasurandEnergyActiveImportRegister,Unit:types.UnitOfMeasureWh}
-		values := []types.MeterValue{{Timestamp:types.Now(),SampledValue:[]types.SampledValue{sample}}}
+		var samples []types.SampledValue
+        if o.Battery != nil {
+            var delivered float64
+            var batteryErr error
+            if o.Seeded { delivered,batteryErr=o.Battery.AdvanceSeeded(o.PowerKW,step) } else { delivered,batteryErr=o.Battery.Advance(o.PowerKW,step) }
+            if batteryErr != nil { return wh,fmt.Errorf("battery advance: %w",batteryErr) }
+            wh,batteryErr=o.Battery.MeterWh(initialBatteryWh)
+            if batteryErr != nil { return wh,fmt.Errorf("battery meter: %w",batteryErr) }
+            liveW:=int(math.RoundToEven(delivered*3600/step.Seconds()))
+            samples=[]types.SampledValue{
+                {Value:fmt.Sprintf("%d",wh),Measurand:types.MeasurandEnergyActiveImportRegister,Unit:types.UnitOfMeasureWh},
+                {Value:fmt.Sprintf("%d",liveW),Measurand:types.MeasurandPowerActiveImport,Unit:types.UnitOfMeasureW},
+                {Value:fmt.Sprintf("%.2f",o.Battery.SOC()),Measurand:types.MeasurandSoC,Unit:types.UnitOfMeasurePercent},
+            }
+        } else {
+            wh = EnergyWh(o.PowerKW,elapsed)
+            samples=[]types.SampledValue{{Value:fmt.Sprintf("%d",wh),Measurand:types.MeasurandEnergyActiveImportRegister,Unit:types.UnitOfMeasureWh}}
+        }
+        values := []types.MeterValue{{Timestamp:types.Now(),SampledValue:samples}}
 		_, err := cp.MeterValues(o.Connector,values,func(r *core.MeterValuesRequest){r.TransactionId=&txID})
 		if err != nil {
 			meterErr = fmt.Errorf("MeterValues: %w (transaction %d may remain open)",err,txID)

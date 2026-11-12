@@ -70,10 +70,14 @@ The command installs `ocpp-simulator-go` and enables:
 ocpp-simulator --backend go run --cp SIM001 --url wss://test.example.test/SIM001 --ca /path/to/ca.pem
 ```
 
-In G1 the Go backend only implements boot and periodic heartbeat with
-WS/WSS, certificate validation, and optional WSS Basic Auth. Python-only
-charge/remote options are **rejected** rather than silently emulated.
-Go does not reconnect automatically. See [Go G1 instructions](go/README.md).
+The Go backend has opt-in G1 (boot/heartbeat), G2 (one-shot charge), and
+experimental G3 (multi-connector RemoteStart/RemoteStop, finite batteries,
+Soft/Hard Reset) functionality. **Go is not production-ready:** there is no
+durable transaction journal or safe restart reconciliation. After a crash,
+a fresh process can announce Available while an earlier transaction remains
+open in the CSMS. Go does **not** automatically reconnect after Reset or
+transport failure. See [Go backend status](go/README.md) and
+[R5 recovery constraints](go/docs/reset-r5.md).
 No backend automatically starts a session during installation.
 
 ## Connect to a CSMS
@@ -148,8 +152,10 @@ MeterValues, StopTransaction and Available. Only accepted authorization and
 start requests are allowed to proceed. Energy is deterministic: 7.2 kW over
 60 seconds equals 120 Wh.
 
-Omit `--connector` to preserve the Chunk 1 boot/heartbeat-only mode.
-Remote commands, multiple concurrent sessions and failover remain future work.
+Omit `--connector` to preserve the boot/heartbeat-only mode. The Python
+backend is still the default. Go G3 provides opt-in multi-connector remote
+commands with documented recovery limitations; neither backend has been
+authorized for production use through this R6 audit.
 
 ## Remote controlled simulator (Chunk 3)
 
@@ -164,10 +170,13 @@ Supports OCPP 1.6J `RemoteStartTransaction`, `RemoteStopTransaction`,
 `Reset`, `GetConfiguration` and `ChangeConfiguration`. Transactions
 are associated with their originating connector, so connector 2 can start
 while connector 1 is charging. Remote stops target the CSMS-assigned
-transaction ID. Soft reset requests graceful transaction stops before
-reconnecting; hard reset interrupts the simulated tasks before reconnecting.
+transaction ID. For the default Python backend, reset and reconnection behavior is described
+by its own implementation. For opt-in Go, Soft attempts confirmed closures
+and Hard interrupts workers; **both terminate the Go process without automatic
+reconnection or replay**. The Go transaction ledger and configuration live
+only in memory, so an external restart without CSMS reconciliation is unsafe.
 
-Configuration lives in memory and is reset on reconnect. The simulated
+Configuration is process-local; The simulated
 primary/backup vendor keys are stored and returned but do **not** drive
 actual endpoint changes or failover yet. That is reserved for Chunk 4.
 

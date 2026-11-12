@@ -1,4 +1,4 @@
-# Go OCPP simulator — G1 connectivity
+# Go OCPP simulator — experimental G1–G3 / R6 audit
 
 Independent OCPP 1.6J charge-point implementation using
 [ocpp-go v0.19.0](https://github.com/lorenzodonini/ocpp-go), whose upstream
@@ -30,8 +30,11 @@ ocpp-simulator-py run --cp SIM001 --url ws://127.0.0.1:9000/SIM001
 ```
 
 The Go backend supports --cp, --url, --vendor, --model, --ca,
---basic-user, --basic-password and --connect-timeout. Unsupported Python
-remote/battery options fail explicitly; remote mode is G3.
+--basic-user, --basic-password and --connect-timeout. G2 supports
+one-shot --connector/--rfid charging; G3 adds explicit --remote,
+--connectors, --battery-kwh, --soc and --seed. Invalid or silently
+ignored settings are rejected before connecting. See the R6 limitations
+below before using these features.
 The Go process stays connected and sends Heartbeats at the interval issued
 by an Accepted BootNotification, until SIGINT/SIGTERM or disconnection.
 It does not auto-reconnect or start on installation.
@@ -74,6 +77,73 @@ StopTransaction and Available. It requires accepted authorization and start
 responses, uses the server's transaction ID, and computes deterministic
 meter readings from configured simulated duration. SIGINT/SIGTERM requests
 an early StopTransaction. Failed MeterValues/StopTransaction never become
-invented successful closes. No remote commands, multiple sessions, battery
-SoC, or automatic reconnect yet. Unit and wire fixture tests are isolated
-from production endpoints.
+invented successful closes. G3 adds remote commands and independent batteries;
+neither G2 nor G3 automatically reconnects. Unit and wire fixture tests are
+isolated from production endpoints.
+
+
+## G3/R0–R5 implementation and R6 offline assessment
+
+Go's remote mode is **experimental**. Python is the default and the only
+backend used unless '--backend go' is selected explicitly. Installing Go does
+not launch a simulator or deploy anything to a live CSMS.
+
+- R1/R2: bounded per-connector SessionManager and ConnectorLedger, atomic
+  reservations, remote authorization/start using a real CSMS-assigned
+  transaction ID; RemoteStart Accepted acknowledges local queue admission only.
+- R3: RemoteStop targets the owned CSMS transaction ID, deduplicates commands,
+  freezes ReasonRemote, sends one StopTransaction and waits for confirmation
+  before releasing the connector or reporting Available.
+- R4: independently seeded finite batteries per connector, session-relative Wh,
+  instantaneous W, SoC, deterministic taper, and natural full charge cutoff.
+- R5: Soft Reset attempts a single confirmed StopTransaction per active session
+  and then terminates the Go process. Hard Reset terminates without inventing
+  a stop receipt. Both deny further remote command admissions. Signals and
+  WebSocket disconnect use bounded fail-closed shutdown.
+
+### R6 safety decision: NO-GO for Ready, production, or automatic restart
+
+The SessionManager and ConnectorLedger are **in memory only**, not a durable
+recovery journal. The R6 offline negative restart fixture demonstrates that
+a second Serve instance with the same charge point identity can advertise
+Available while a CSMS transaction from the first instance remains open.
+It cannot distinguish a pending StartTransaction with lost acknowledgement
+from a truly free connector.
+
+Other limits: there is no automatic reconnection or transaction replay,
+in-flight OCPP calls cannot be revoked, the library does not provide a
+ResetConfirmation delivery acknowledgement, and stderr evidence is not
+durable. A Hard Reset simulates a bounded software teardown; it does not
+reset physical charger hardware.
+
+**Do not enable an auto-restart service or merge/deploy this experimental Go
+backend for production.** Future work requires explicit startup
+reconciliation/transaction persistence design, offline failure/recovery
+tests followed by separately authorized isolated field validation. A
+green offline CI is not proof of production readiness. See
+[reset and shutdown limits](docs/reset-r5.md) and
+[full R6 evaluation](docs/audit-r6.md).
+
+## R6C-1 recovery bootstrap
+
+The Go remote CLI requires `--recovery-dir` (private absolute directory) and
+`--recovery-tenant` (explicit source/tenant). A newly created or reopened
+SQLite recovery store is always `Quarantined`; because no authoritative CSMS
+reconciliation service exists, **actual Go remote mode currently refuses all
+connections, even to an empty CSMS**. The R1–R5 loopback integration tests
+use a test-binary-only fixture path; this is not a production bypass.
+See [R6C-1 details](docs/recovery-r6c1.md). Python remains the default.
+
+## R6C-2 transactional recovery (offline)
+
+The experimental Go backend has a durable private SQLite attempt/outbox ledger
+for reservations, StartTransaction, MeterValues, RemoteStop, StopTransaction
+and their observed acknowledgements, with connector ownership, generation
+and battery RNG/SoC snapshots. See
+[R6C-2 implementation limits](docs/recovery-r6c2.md).
+
+**It remains fully quarantined in the normal executable.** The journal does
+not grant CSMS reconciliation authority, permit replay or prove that an
+unknown OCPP command was executed. Automatic restart, Ready, merge and
+production access remain prohibited until an independently approved R6C-3
+reconciliation/fencing contract is implemented and accepted.
