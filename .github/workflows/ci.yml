@@ -160,8 +160,6 @@ jobs:
         run: go test -race -count=3 ./internal/spike -run '^TestR6C3B2LAB5'
       - name: Cross-compile offline ARM64 UID test executable (LAB-5)
         shell: bash
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/r6c3b2-lab5
@@ -176,7 +174,6 @@ jobs:
           ( cd /tmp/r6c3b2-lab5 && sha256sum uidlab-linux-arm64.test > SHA256SUMS && sha256sum -c SHA256SUMS )
           printf 'checkout=%s\n' "$(git rev-parse HEAD)" > /tmp/r6c3b2-lab5/source-identity.txt
           printf 'event=%s\n' "$GITHUB_EVENT_NAME" >> /tmp/r6c3b2-lab5/source-identity.txt
-          printf 'pr_head=%s\n' "$PR_HEAD_SHA" >> /tmp/r6c3b2-lab5/source-identity.txt
       - uses: actions/upload-artifact@v4
         with:
           name: r6c3b2-lab5-arm64-offline-test-elf
@@ -187,8 +184,6 @@ jobs:
         run: go test -race -count=3 ./cmd/r6c3b2-uidlab
       - name: R6C-3B2 LAB-6 build and attest client ARM64
         shell: bash
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           test "$(go env GOSUMDB)" != off
@@ -204,9 +199,8 @@ jobs:
           go list -m -json github.com/lorenzodonini/ocpp-go > /tmp/r6c3b2-lab6/ocpp-go-module.json
           jq -e '.Path == "github.com/lorenzodonini/ocpp-go" and .Version == "v0.19.0" and .Sum == "h1:THNriVV3bUWkGzaIkDeytcgoeBRjoN9ezPHsddIDfgc="' /tmp/r6c3b2-lab6/ocpp-go-module.json
           ( cd /tmp/r6c3b2-lab6 && sha256sum uidlab-client-linux-arm64 > SHA256SUMS && sha256sum -c SHA256SUMS )
-          printf 'checkout=%s\nevent=%s\npr_head=%s\nrun_id=%s\nrun_attempt=%s\n' \
-            "$(git rev-parse HEAD)" "$GITHUB_EVENT_NAME" "$PR_HEAD_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > /tmp/r6c3b2-lab6/source-identity.txt
-          test "$PR_HEAD_SHA" != ""
+          printf 'checkout=%s\nevent=%s\nrun_id=%s\nrun_attempt=%s\n' \
+            "$(git rev-parse HEAD)" "$GITHUB_EVENT_NAME" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > /tmp/r6c3b2-lab6/source-identity.txt
       - uses: actions/upload-artifact@v4
         with:
           name: r6c3b2-lab6-arm64-isolated-client
