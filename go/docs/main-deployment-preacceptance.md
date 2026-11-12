@@ -1,61 +1,59 @@
-# Main-branch deployment of ocpp-simulator (pre-merge acceptance)
+# Simulator Ansible release and delegated auto-install — PRE-READY
 
-**Scope:** the existing PR Draft #20; no merge or installation is performed when
-this workflow is introduced on a feature branch.
+The simulator's own `.github/workflows/deploy-main.yml` has been **retired
+from PR Draft #20**. GitHub has zero `arthexis/ocpp-simulator` self-hosted
+runners: its previous push-to-main workflow would have queued indefinitely.
+The required simulator `CI` workflow remains intact and continues to run
+on pull requests and main pushes using hosted runners.
 
-A successful push to protected `main` (including an authorized merge) schedules
-`.github/workflows/deploy-main.yml` on the **existing** self-hosted GitHub
-Actions ARM64 runner labeled `gway-001`, under its existing `arthe` account.
-There is no agent, OAuth credential, new service, timer, Ansible privilege, or
-deployment broker added by this feature.
+The replacement installation **is not yet active**: GWay Remote
+[Draft PR #559](https://github.com/arthexis/gway-remote/pull/559)
+proposes a fixed, CI-gated schedule on GWay Remote's existing repository-scoped
+`gway-001` runner, which operates as `arthe`. It requires simulator PR #20
+to have been merged and the latest **exact main SHA** `push` CI to succeed.
+The proposed route uses the operator's existing GitHub authentication and
+a private, temporary exact-SHA checkout. No extra runner, service, credentials,
+OAuth scope or generalized deployment target is introduced.
 
-The workflow is deliberately **not triggered by pull requests**. It serializes
-its own runs, skips a superseded `main` SHA, performs a clean Actions checkout
-of the exact push SHA (never changes `~/Repos/ocpp-simulator`), checks operator
-and architecture, snapshots the existing `current`/`previous` symlink
-targets, then calls `sh ./deploy.sh` using the existing owner-scoped flock and
-Ansible role. No service is started. Both Python and Go backends are installed
-normally. The R6C-3B2 test-only `r6c3b2-uidlab` is built from the *same source*
-and remains private to the immutable release, with relative SHA256SUMS; it is
-not published in `~/.local/bin`.
+## Installation contract preserved in the simulator repository
 
-A read-only post-install verifier checks `releases/<sha>`, `.revision`,
-`current`, the pre-install `previous`/old `current` transition, executable
-availability and symlinks for both backends, and the exact test-only binary
-SHA-256. It invokes **no simulator session**. Three normal CLI `--help`
-commands are permitted; the Go module version is checked from binary build
-metadata. Failure stops the job; it does not invoke replay, restart or
-`CleanVerified`. No rollback is introduced by this workflow; a failed
-candidate remains evident for diagnosis under the versioned release design.
+The simulator's existing `deploy.sh` and Ansible role remain the only
+installer. They build both Python and Go backends from the checked-out source,
+plus private `r6c3b2-uidlab` (`ocpp-go v0.19.0`, pinned and checksum-
+verified). Versioned releases have `.revision`, `current/previous` links,
+regular executable files and a relative SHA-256 checksum for the lab client.
+No test-only client is published in `~/.local/bin` and neither CLI nor Ansible
+launches a simulator session or a service.
 
-CI tests the verifier against synthetic initial, upgrade, same-SHA, corrupted,
-wrong-link, missing-backend and accidentally published-lab fixtures, and parses
-the workflow YAML without scheduling the self-hosted runner. These checks do
-**not** constitute a live gway-001 install receipt.
+Read-only `scripts/verify_main_install.py` verifies SHA provenance,
+immutable release paths, CLI symlinks, Go/Python binaries and lab SHA-256.
+CI keeps synthetic initial/upgrade/same-SHA tests and negative tests
+for tampered binaries, incorrect pointers and accidental CLI exposure.
 
-Caveats: the CI `Ansible installer` runs on a GitHub-hosted runner. The existing
-gway-001 simulator release is an older short-SHA release without Go backend and
-without `.revision`, and the operator checkout is behind. The new normal
-installer creates a different immutable SHA release. Actual arrival at gway-001
-must be verified against the exact post-merge SHA after an explicitly approved
-merge. `BeforeAvailable=Quarantined` and R6 remains unchecked; no
-`CleanVerified`, replay, admission, or production Go↔CSMS claim.
+## Fail-closed main-SHA fence retained
 
-## PRE-READY main advancement fence
+The delegated GWay Remote deploy coordinator will pass
+`OCPP_SIMULATOR_EXPECTED_MAIN_SHA=<exact current main SHA>` to
+the simulator's `deploy.sh`. Ansible first verifies that this SHA matches
+the checkout, then **after compilation** runs
+`scripts/verify_main_head.py` immediately before any mutation of
+`previous/current`. If GitHub's canonical main SHA advanced, or the query
+fails or is malformed, activation is refused. The ordinary manually invoked
+`deploy.sh` without this opt-in variable is unchanged. Offline CI still
+covers mismatch, timeout and task ordering.
 
-The main-only workflow passes the opt-in environment variable
-`OCPP_SIMULATOR_EXPECTED_MAIN_SHA` to its existing Ansible deployment step.
-The role rejects an invalid expected value or an SHA different from the
-actual checkout. **After building and validating** both Go executables, and
-immediately **before** changing `previous` or `current`, the role calls
-`scripts/verify_main_head.py` to fetch canonical GitHub `main` using the
-existing Actions `GH_TOKEN`. Drift, missing/invalid data, inaccessible API,
-or timeout abort activation without changing either release pointer.
-Ordinary manual `deploy.sh` runs with no expected SHA retain the original
-behavior. CI mocks the canonical GitHub response and verifies ordering.
+A GitHub HEAD query and a local filesystem symlink change cannot be atomic:
+there remains a small post-check race, explicitly not claimed away.
 
-**Limitation:** a GitHub HEAD read cannot be atomic with a local symlink
-update. A change to `main` in the tiny interval after the final read can
-still produce transient outdated activation. The only registered runner on
-`gway-001` is scoped to `arthexis/gway-remote`; GitHub reports zero runners
-for `ocpp-simulator`. Thus neither Ready nor merge is permitted yet.
+## Acceptance boundaries
+
+GWay Remote PR #559 and simulator PR #20 both remain **Draft**, with no merge,
+installation or active delegated scheduler from these changes. Offline CI
+demonstrates build/verification behavior, not actual installation on
+`gway-001`. Before Ready or merge, validate the exact HEADs, checks,
+reviews, rulesets and cross-repository sequencing, and explicitly authorize
+the activation/deployment step.
+
+`BeforeAvailable=Quarantined` and R6 unchecked remain mandatory. No
+`CleanVerified`, replay, admission, OCPP-CSMS production change, SQLite
+migration or network test is authorized by this cleanup.

@@ -89,20 +89,16 @@ jobs:
         run: ANSIBLE_ROLES_PATH=ansible/roles ansible-playbook ansible/playbooks/install.yml -i localhost, --syntax-check
       - name: Ansible lint
         run: ANSIBLE_ROLES_PATH=ansible/roles ansible-lint --profile basic ansible/
-      - name: Validate deployment workflow syntax without contacting gway-001
+      - name: Verify obsolete simulator-scoped runner workflow is removed
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import yaml
-          document = yaml.load(
-              Path(".github/workflows/deploy-main.yml").read_text(encoding="utf-8"),
-              Loader=yaml.BaseLoader,
+          workflows = Path(".github/workflows")
+          assert not (workflows / "deploy-main.yml").exists()
+          assert all(
+              "runs-on: [self-hosted" not in path.read_text(encoding="utf-8")
+              for path in workflows.glob("*.yml")
           )
-          assert document["on"] == {"push": {"branches": ["main"]}}
-          assert document["jobs"]["install"]["runs-on"] == [
-              "self-hosted", "Linux", "ARM64", "gway-001",
-          ]
-          assert document["concurrency"]["cancel-in-progress"] == "false"
           PY
       - name: Deploy both backends with Ansible
         run: ./deploy.sh

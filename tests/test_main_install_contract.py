@@ -100,26 +100,21 @@ def test_missing_backend_and_bad_checksum_record_fail_closed(tmp_path):
         verify_release(root2, user_bin2, SHA)
 
 
-def test_workflow_main_only_and_no_service_start():
-    workflow = (ROOT / ".github/workflows/deploy-main.yml").read_text(encoding="utf-8")
-    assert "on:\n  push:\n    branches: [main]" in workflow
-    assert "pull_request:" not in workflow
-    assert "workflow_dispatch:" not in workflow
-    assert "runs-on: [self-hosted, Linux, ARM64, gway-001]" in workflow
-    assert "cancel-in-progress: false" in workflow
-    assert "persist-credentials: false" in workflow
-    assert "test \"$(id -un)\" = arthe" in workflow
-    assert workflow.count("sh ./deploy.sh") == 1
-    assert "gh api repos/arthexis/ocpp-simulator/branches/main" in workflow
-    assert "scripts/verify_main_install.py" in workflow
-    assert "systemctl " not in workflow and "sudo " not in workflow
-    assert "r6c3b2-uidlab --" not in workflow
+def test_simulator_scoped_runner_workflow_is_retired():
+    """Simulator CI stays hosted; GWay Remote Draft #559 owns future deployment."""
+    workflows = ROOT / ".github" / "workflows"
+    assert not (workflows / "deploy-main.yml").exists()
+    ci = (workflows / "ci.yml").read_text(encoding="utf-8")
+    assert "  push:\n    branches:\n      - main" in ci
+    assert "Verify obsolete simulator-scoped runner workflow is removed" in ci
+    assert "runs-on: [self-hosted" not in ci
     tasks = (ROOT / "ansible/roles/ocpp_simulator/tasks/main.yml").read_text(
         encoding="utf-8"
     )
     assert "ansible.builtin.systemd:" not in tasks
     assert "ansible.builtin.service:" not in tasks
     assert "./cmd/r6c3b2-uidlab" in tasks
+    assert "./cmd/ocpp-simulator-go" in tasks
 
 
 def test_main_fence_fail_closed_offline(monkeypatch):
@@ -164,6 +159,6 @@ def test_main_fence_is_between_build_and_pointer_writes():
     assert "OCPP_SIMULATOR_EXPECTED_MAIN_SHA" in role
     assert "ocpp_simulator_activate | bool" in role[guard:previous]
     assert "ocpp_simulator_expected_main_sha != ''" in role[guard:previous]
-    workflow = (ROOT / ".github/workflows/deploy-main.yml").read_text(encoding="utf-8")
-    assert "OCPP_SIMULATOR_EXPECTED_MAIN_SHA: ${{ github.sha }}" in workflow
-    assert "GH_TOKEN: ${{ github.token }}" in workflow
+    assert "lookup('ansible.builtin.env', 'OCPP_SIMULATOR_EXPECTED_MAIN_SHA')" in role
+    assert (ROOT / "scripts/verify_main_head.py").is_file()
+    assert (ROOT / "scripts/verify_main_install.py").is_file()
