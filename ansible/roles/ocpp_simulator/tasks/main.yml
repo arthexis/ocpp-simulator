@@ -192,6 +192,7 @@
     argv:
       - go
       - build
+      - -buildvcs=false
       - -o
       - "{{ ocpp_simulator_release }}/bin/ocpp-simulator-go"
       - ./cmd/ocpp-simulator-go
@@ -206,6 +207,7 @@
     argv:
       - go
       - build
+      - -buildvcs=false
       - -trimpath
       - -o
       - "{{ ocpp_simulator_release }}/bin/r6c3b2-uidlab"
